@@ -3,15 +3,25 @@ from isaacgym import gymapi
 from isaacgym import gymutil
 import open3d as o3d
 
+# 获取Gym实例
 gym = gymapi.acquire_gym()
 sim_params = gymapi.SimParams()
 sim_params.up_axis = gymapi.UP_AXIS_Z
+sim_params.substeps = 2  # 可以根据需要调整子步数
+sim_params.dt = 0.01     # 可以根据需要调整时间步长
+
+# 创建仿真
 sim = gym.create_sim(0, 0, gymapi.SIM_PHYSX, sim_params)
+
+# 检查是否成功创建仿真
+if sim is None:
+    print("Failed to create sim")
+    quit()
 
 # 创建环境
 env = gym.create_env(sim, gymapi.Vec3(-1, -1, -1), gymapi.Vec3(1, 1, 1), 1)
 
-# 加载 URDF 机器人
+# 加载URDF机器人模型
 asset_root = "./assets/screwdriver/"
 urdf_file = "screwdriver.urdf"
 asset_options = gymapi.AssetOptions()
@@ -38,47 +48,42 @@ camera_pose.p = gymapi.Vec3(1.5, 1.5, 1.0)  # 相机位置
 camera_pose.r = gymapi.Quat.from_euler_zyx(-np.pi / 4, 0, np.pi / 4)  # 相机旋转
 gym.set_camera_transform(camera_handle, env, camera_pose)
 
-# 仿真步进
-gym.simulate(sim)
-gym.fetch_results(sim, True)
+# 创建并启动可视化
+viewer = gym.create_viewer(sim, gymapi.CameraProperties())
+gym.subscribe_viewer_camera_image(sim, viewer, camera_handle)
 
-# 渲染相机图像
-gym.render_all_camera_sensors(sim)
+# 创建Open3D的可视化窗口
+vis = o3d.visualization.Visualizer()
+vis.create_window()
 
-# 获取深度图
-depth_image = gym.get_camera_image(sim, env, camera_handle, gymapi.IMAGE_DEPTH)
-depth_image = np.array(depth_image, dtype=np.float32).reshape(camera_props.height, camera_props.width)
+# 进行仿真步进并显示相机画面
+while not gym.query_viewer_has_closed(viewer):
+    gym.simulate(sim)
+    gym.fetch_results(sim, True)
+    gym.step_graphics(sim)
+    gym.draw_viewer(sim, viewer, True)
 
-# 打印深度图信息
-print(f"Captured depth image with shape: {depth_image.shape}")
+    # 获取相机图像
+    depth_image = gym.get_camera_image(sim, env, camera_handle, gymapi.IMAGE_DEPTH)
+    depth_image = np.array(depth_image, dtype=np.float32).reshape(camera_props.height, camera_props.width)
 
-# 过滤无效深度值
-valid_mask = np.isfinite(depth_image) & (depth_image > 0)
-z = depth_image.flatten()[valid_mask]
+    # 将深度图转换为适合Open3D显示的格式
+    depth_image_o3d = o3d.geometry.Image((depth_image / np.max(depth_image) * 255).astype(np.uint8))
 
-# 相机内参
-fx = fy = 320  # 焦距
-cx = camera_props.width / 2  # 图像中心点 x
-cy = camera_props.height / 2  # 图像中心点 y
+    # 清除之前的几何体
+    vis.clear_geometries()
 
-# 只保留有效点的 x 和 y
-x, y = np.meshgrid(np.arange(camera_props.width), np.arange(camera_props.height))
-x = (x.flatten()[valid_mask] - cx) * z / fx
-y = (y.flatten()[valid_mask] - cy) * z / fy
+    # 添加新的几何体
+    vis.add_geometry(depth_image_o3d)
 
-# 生成点云
-points = np.stack((x, y, z), axis=-1)
+    # 更新可视化窗口
+    vis.update_renderer()
 
-# 创建 Open3D 点云对象
-pcd = o3d.geometry.PointCloud()
-pcd.points = o3d.utility.Vector3dVector(points)
+# 关闭Open3D的可视化窗口
+vis.destroy_window()
 
-# 保存点云
-o3d.io.write_point_cloud("pointcloud.ply", pcd)
-print("Point cloud saved to pointcloud.ply")
+# 关闭Isaac Gym的可视化
+gym.destroy_viewer(sim, viewer)
 
-# 可视化点云
-o3d.visualization.draw_geometries([pcd])
-
-# 关闭 Isaac Gym
+# 销毁仿真
 gym.destroy_sim(sim)
