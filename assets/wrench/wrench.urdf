@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+
+<robot name="wrench">
+<link name="base">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0.0"/>
+      <mass value="1.0"/>
+      <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>
+    </inertial>
+    <visual>
+        <geometry>
+            <cylinder radius="0.05" length="0.1"/>
+        </geometry>
+        <material name="Cyan1">
+	 	<color rgba="0 0.9 0.9 1.0"/>
+	</material>
+    </visual>
+    <collision>
+        <geometry>
+            <cylinder radius="0.05" length="0.1"/>
+        </geometry>
+    </collision>
+</link>
+
+<link name="shaft">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0.0"/>
+      <mass value="1.0"/>
+      <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>
+    </inertial>
+    <visual>
+        <geometry>
+            <cylinder radius="0.025" length="0.05"/>
+        </geometry>
+         <material name="Purple1">
+	 	<color rgba="0.9 0. 0.9 1.0"/>
+	    </material>
+    </visual>
+
+</link>
+
+<link name="crank">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0.0"/>
+      <mass value="1.0"/>
+      <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>
+    </inertial>
+    <visual>
+        <geometry>
+            <cylinder radius="0.025" length="0.25"/>
+        </geometry>
+            <material name="Purple1">
+	 	<color rgba="0.9 0. 0.9 1.0"/>
+	    </material>
+    </visual>
+    <collision>
+        <geometry>
+            <cylinder radius="0.025" length="0.25"/>
+        </geometry>
+    </collision>
+</link>
+
+<joint name="base_shaft" type="revolute">
+    <parent link="base"/>
+    <child link="shaft"/>
+    <origin rpy="0 0 0" xyz="0 0 0.0751"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="100" 
+           lower="-100" 
+           upper="100" 
+           velocity="2"/>
+	<dynamics damping="0" friction="100" />
+</joint>
+
+<joint name="shaft_crank" type="fixed">
+    <parent link="shaft"/>
+    <child link="crank"/>
+    <origin rpy="0 1.57079632679 0" xyz="0.115 0 0.0"/>
+    <axis xyz="0 0 1"/>
+</joint> 	
+ 
+</robot>
