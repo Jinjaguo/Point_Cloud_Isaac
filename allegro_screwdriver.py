@@ -1355,14 +1355,12 @@ if __name__ == "__main__":
             # If params['device'] is cuda:1 but the computer only has 1 gpu, change to cuda:0
 
             ### here we try to get depth image ###
-            depth_image_1 = env.get_depth_image()
-            if depth_image_1 is not None:
+            depth_tensor = env.get_depth_image()
+            print("Depth tensor shape:", depth_tensor)
+            if depth_tensor is not None:
                 print('successfully get the depth image')
-
-            import matplotlib.pyplot as plt
-            plt.imshow(depth_image_1)
-            plt.title("Image Visualization")
-            plt.show()
+                points = env.depth_image_to_point_cloud_GPU(0, depth_tensor,device='cuda:0')
+                env.save_point_clouds(points)
 
             final_distance_to_goal = do_trial(env, params, fpath, sim_env, ros_copy_node, inits_noise[i], noise_noise[i], seed=i)
             depth_image_2 = env.get_depth_image(env_index=0)
