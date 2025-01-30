@@ -679,6 +679,16 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         resample = params.get('diffusion_resample', False)
         for k in range(planner.problem.T):  # range(params['num_steps']):
             state = env.get_state()
+            ### here we try to get depth image ###
+            depth_tensor, mask_tensor = env.get_depth_image()
+            print("Depth tensor shape:", depth_tensor)
+            if depth_tensor is not None:
+                print('successfully get the depth image')
+                points = env.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
+                env.save_point_clouds(points)
+            print("---------------------------------------------------")
+            print('successfully get the point cloud of the screwdriver')
+            print("---------------------------------------------------")
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             state = state[:planner.problem.dx]
 
@@ -1354,18 +1364,8 @@ if __name__ == "__main__":
             params['object_location'] = object_location
             # If params['device'] is cuda:1 but the computer only has 1 gpu, change to cuda:0
 
-            ### here we try to get depth image ###
-            depth_tensor = env.get_depth_image()
-            print("Depth tensor shape:", depth_tensor)
-            if depth_tensor is not None:
-                print('successfully get the depth image')
-                points = env.depth_image_to_point_cloud_GPU(0, depth_tensor,device='cuda:0')
-                env.save_point_clouds(points)
-
             final_distance_to_goal = do_trial(env, params, fpath, sim_env, ros_copy_node, inits_noise[i], noise_noise[i], seed=i)
-            depth_image_2 = env.get_depth_image(env_index=0)
-            if depth_image_2 is not None:
-                print('222')
+
         print(results)
 
     gym.destroy_viewer(viewer)
