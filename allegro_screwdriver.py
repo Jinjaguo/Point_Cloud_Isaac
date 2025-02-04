@@ -681,14 +681,14 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             state = env.get_state()
             ### here we try to get depth image ###
             depth_tensor, mask_tensor = env.get_depth_image()
-            print("Depth tensor shape:", depth_tensor)
+            # print("Depth tensor shape:", depth_tensor)
             if depth_tensor is not None:
                 print('successfully get the depth image')
                 points = env.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
                 env.save_point_clouds(points)
-            print("---------------------------------------------------")
+            # print("---------------------------------------------------")
             print('successfully get the point cloud of the screwdriver')
-            print("---------------------------------------------------")
+            # print("---------------------------------------------------")
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             state = state[:planner.problem.dx]
 
@@ -1305,7 +1305,7 @@ if __name__ == "__main__":
     config['ee_names'] = ee_names
     config['obj_dof'] = 3
 
-    screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver.urdf'
+    screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
 
     chain = pk.build_chain_from_urdf(open(asset).read())
     screwdriver_chain = pk.build_chain_from_urdf(open(screwdriver_asset).read())
