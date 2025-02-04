@@ -51,5 +51,5 @@ def process_folder(folder_path):
             process_ply_file(ply_file, save_dir)
 
 if __name__ == "__main__":
-    folder_path = './pointclouds/02-04/'
+    folder_path = './pointclouds/run1/'
     process_folder(folder_path)

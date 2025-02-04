@@ -677,18 +677,29 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         }
         plans = None
         resample = params.get('diffusion_resample', False)
+
+        # save the point cloud and depth image of the screwdriver
+        base_points_path= "./pointclouds"
+        base_pics_path = "./pics"
+        pics_path = env.get_new_folder(base_pics_path)
+        points_path = env.get_new_folder(base_points_path)
+
+        ori_list = []
+        pos_list = []
         for k in range(planner.problem.T):  # range(params['num_steps']):
-            state = env.get_state()
+            print("----------------------------------------------------------------")
+            print(f"Step {k+1}")
+
             ### here we try to get depth image ###
-            depth_tensor, mask_tensor = env.get_depth_image()
+            depth_tensor, mask_tensor = env.get_depth_image(pics_path)
             # print("Depth tensor shape:", depth_tensor)
             if depth_tensor is not None:
-                print('successfully get the depth image')
+                # print('successfully get the depth image')
                 points = env.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
-                env.save_point_clouds(points)
-            # print("---------------------------------------------------")
-            print('successfully get the point cloud of the screwdriver')
-            # print("---------------------------------------------------")
+                env.save_point_clouds(points, points_path)
+
+            # print('successfully get the point cloud of the screwdriver')
+            state = env.get_state()
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             state = state[:planner.problem.dx]
 
@@ -747,6 +758,13 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             state = state['q'].reshape(-1).to(device=params['device'])
             ori = state[:15][-3:]
             print('Current ori:', ori)
+            pos = env.get_pose_of_screwdriver()
+
+            pos = pos.detach().cpu().numpy()
+            ori = ori.detach().cpu().numpy()
+            ori_list.append(ori)
+            pos_list.append(pos)
+
             # record the actual trajectory
             if mode == 'turn':
                 index_force = torch.norm(best_traj[..., 27:30], dim=-1)
@@ -846,6 +864,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         # actual_trajectory.append(env.get_state()['q'].reshape(9).to(device=params['device']))
         actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
         # can't stack plans as each is of a different length
+        env.save_to_csv(ori_list, pos_list, points_path)
 
         # for memory reasons we clear the data
         if params['controller'] != 'diffusion_policy':
@@ -1014,7 +1033,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         state = state['q'].reshape(-1)[:15].to(device=params['device'])
         ori = state[:15][-3:]
         yaw = ori[-1]
-        print('Current yaw:', ori)
+        # print('Current yaw:', ori)
         # valve_goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
 
         # if sample_contact:
