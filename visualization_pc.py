@@ -1,7 +1,7 @@
 import open3d as o3d
 import os
 
-path = "./screwdriver_pointclouds"
+path = "./pointclouds/run_1/screwdriver_only"
 files = os.listdir(path)
 
 
