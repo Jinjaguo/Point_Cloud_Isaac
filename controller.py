@@ -4,7 +4,7 @@ import open3d as o3d
 from isaac_victor_envs.utils import get_assets_dir
 import sys
 from pytorch_volumetric import sdf
-from sklearn.neighbors import NearestNeighbors
+import copy
 
 
 sys.path.append('..')
@@ -53,7 +53,6 @@ class Controller:
 
 
 class Sample_Points():
-
     def __init__(self, point_cloud_file_path, screwdriver_asset):
         self.file_path = point_cloud_file_path
         self.screwdriver_asset = screwdriver_asset
@@ -88,27 +87,43 @@ class Sample_Points():
         return sampled_surface_points.numpy()
 
 
-def get_pose_estimation(point_cloud, sampled_surface_points):
-    # estimate object pose from point cloud and signed distance field
-    source = o3d.geometry.PointCloud(point_cloud)
-    target = o3d.geometry.PointCloud(sampled_surface_points)
-    threshold = 0.02
-    trans_init = np.asarray([[0.862, 0.011, -0.507, 0.5],
-                             [-0.139, 0.967, -0.215, 0.7],
-                             [0.487, 0.255, 0.835, -1.4], [0.0, 0.0, 0.0, 1.0]])
+class points_registration():
+    def __init__(self):
+        pass
 
-    evaluation = o3d.registration.evaluate_registration(source, target,
-                                                        threshold, trans_init)
-    print(evaluation)
-    print("Apply point-to-point ICP")
-    reg_p2p = o3d.registration.registration_icp(
-        source, target, threshold, trans_init,
-        o3d.registration.TransformationEstimationPointToPoint())
-    print(reg_p2p)
-    print("Transformation is:")
-    print(reg_p2p.transformation)
 
-def visualize_reg(point_cloud, sampled_surface_points, transformation_matrix):
-    # visualize registration result
-    source = o3d.geometry.PointCloud(point_cloud)
-    target = o3d.geometry.PointCloud(sampled_surface_points)
+    def get_pose_estimation(self,point_cloud, sampled_surface_points):
+        # estimate object pose from point cloud and signed distance field
+        source = o3d.geometry.PointCloud(point_cloud)
+        target = o3d.geometry.PointCloud(sampled_surface_points)
+        threshold = 0.02
+        trans_init = np.asarray([[0.862, 0.011, -0.507, 0.5],
+                                 [-0.139, 0.967, -0.215, 0.7],
+                                 [0.487, 0.255, 0.835, -1.4], [0.0, 0.0, 0.0, 1.0]])
+        self.draw_registration_result(source, target, trans_init)
+        print("Initial alignment")
+        evaluation = o3d.registration.evaluate_registration(source, target,
+                                                            threshold, trans_init)
+        print(evaluation)
+
+        print("Apply point-to-point ICP")
+        reg_p2p = o3d.registration.registration_icp(
+            source, target, threshold, trans_init,
+            o3d.registration.TransformationEstimationPointToPoint())
+        print(reg_p2p)
+        print("Transformation is:")
+        print(reg_p2p.transformation)
+        print("")
+        self.draw_registration_result(source, target, reg_p2p.transformation)
+
+
+    def draw_registration_result(self,source, target, transformation):
+        source_temp = copy.deepcopy(source)
+        target_temp = copy.deepcopy(target)
+        source_temp.paint_uniform_color([1, 0.706, 0])
+        target_temp.paint_uniform_color([0, 0.651, 0.929])
+        source_temp.transform(transformation)
+        o3d.visualization.draw_geometries([source_temp, target_temp])
+
+if __name__ == "__main__":
+    #
