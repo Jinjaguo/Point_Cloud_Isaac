@@ -1,4 +1,17 @@
 import numpy as np
+import os
+import open3d as o3d
+from isaac_victor_envs.utils import get_assets_dir
+import sys
+from pytorch_volumetric import sdf
+from sklearn.neighbors import NearestNeighbors
+
+
+sys.path.append('..')
+
+import pytorch_volumetric as pv
+import pytorch_kinematics as pk
+from ccai.utils.allegro_utils import *
 
 
 class Controller:
@@ -30,15 +43,6 @@ class Controller:
         self.o_sdf_ = self.get_sdf(self.o_pose_)  # TODO: get sdf of estimated object pose
         return self.o_pose_, self.o_sdf_
 
-    def pose_function(self):
-        w_p_1 = 0.1  # weight for object pose cost
-        w_p_2 = 0.1  # weight for object pose cost
-        # implement cost function
-        J_obj_pose = np.linalg.norm(self.o_pose_ - self.o_pose)
-        J_q = np.linalg.norm(self.q - self.q_)
-        J_p = w_p_1 * J_obj_pose + w_p_2 * J_q
-        return J_p
-
     def contact_point_function(self):
         w_1 = 0.1  # weight for contact point cost
         # forwards kinematics to get contact point
@@ -47,35 +51,64 @@ class Controller:
         J_c = w_1 * np.linalg.norm(contact_point - ee_point)
         return J_c
 
-    def control_cost(self):
-        w_u = 0.1  # weight for control cost
-        J_u = w_u * np.linalg.norm(self.u)
-        return J_u
 
-    def smoothness_cost(self, u_prev):
-        w_s = 0.1
-        J_s = w_s * np.linalg.norm(self.u - u_prev)
-        return J_s
+class Sample_Points():
 
-    def dynamics_cost(self, q_dot, torque):
-        v_max = 1.5  # 速度限制
-        tau_max = 2.0  # 力矩限制
-        w_d = 0.1  # 权重
+    def __init__(self, point_cloud_file_path, screwdriver_asset):
+        self.file_path = point_cloud_file_path
+        self.screwdriver_asset = screwdriver_asset
 
-        J_v = w_d * max(0, np.linalg.norm(q_dot) - v_max) ** 2
-        J_tau = w_d * max(0, np.linalg.norm(torque) - tau_max) ** 2
+    def get_point_cloud(self, file):
+        # get point cloud from path
+        file = os.path.join(self.file_path, file)
+        pcd = o3d.io.read_point_cloud(file)
+        pc = np.asarray(pcd.points)
+        return pc
 
-        return J_v + J_tau
+    def get_sample_points_sdf(self, num_points_per_link=1000):
+        screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
+        screwdriver_chain = pk.build_chain_from_urdf(open(screwdriver_asset).read())
+        object_sdf = pv.RobotSDF(screwdriver_chain, path_prefix=get_assets_dir() + '/screwdriver',
+                                 use_collision_geometry=False, link_sdf_cls=sdf.CylinderSDF)
+        print(f"Number of links in SDF: {len(object_sdf.sdf.sdfs)}")
+        all_points = []
+        for i, link_sdf in enumerate(object_sdf.sdf.sdfs):
+            num_points_per_link /= 5  # reduce number of points per link to speed up sampling
+            link_surface_points, _ = link_sdf.sample_surface_points(num_points_per_link)
+            if link_surface_points is None or link_surface_points.nelement() == 0:
+                print(f"Warning: No points sampled for link {i}")
+                continue
+            all_points.append(link_surface_points)
+            # print(f"Link {i} - Sampled points shape: {link_surface_points.shape}")
+            # print(f"First few points: \n{link_surface_points[:5]}")
 
-    def total_cost(self, u_prev, c_prev, q_dot, torque):
-        J_total = (
-                self.pose_function() +
-                self.control_cost() +
-                self.smoothness_cost(u_prev) +
-                self.dynamics_cost(q_dot, torque)
-        )
-        return J_total
+        sampled_surface_points = torch.cat(all_points, dim=0)
+        print("Sampled points shape:", sampled_surface_points.shape)
+
+        return sampled_surface_points.numpy()
 
 
+def get_pose_estimation(point_cloud, sampled_surface_points):
+    # estimate object pose from point cloud and signed distance field
+    source = o3d.geometry.PointCloud(point_cloud)
+    target = o3d.geometry.PointCloud(sampled_surface_points)
+    threshold = 0.02
+    trans_init = np.asarray([[0.862, 0.011, -0.507, 0.5],
+                             [-0.139, 0.967, -0.215, 0.7],
+                             [0.487, 0.255, 0.835, -1.4], [0.0, 0.0, 0.0, 1.0]])
 
+    evaluation = o3d.registration.evaluate_registration(source, target,
+                                                        threshold, trans_init)
+    print(evaluation)
+    print("Apply point-to-point ICP")
+    reg_p2p = o3d.registration.registration_icp(
+        source, target, threshold, trans_init,
+        o3d.registration.TransformationEstimationPointToPoint())
+    print(reg_p2p)
+    print("Transformation is:")
+    print(reg_p2p.transformation)
 
+def visualize_reg(point_cloud, sampled_surface_points, transformation_matrix):
+    # visualize registration result
+    source = o3d.geometry.PointCloud(point_cloud)
+    target = o3d.geometry.PointCloud(sampled_surface_points)

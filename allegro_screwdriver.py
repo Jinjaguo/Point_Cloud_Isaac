@@ -46,7 +46,7 @@ from model import LatentDiffusionModel
 
 # from diffusion_mcts import DiffusionMCTS
 
-CCAI_PATH = pathlib.Path(__file__).resolve().parents[1]
+CCAI_PATH = pathlib.Path(__file__).resolve().parents[0]
 
 print("CCAI_PATH", CCAI_PATH)
 
@@ -1325,9 +1325,8 @@ if __name__ == "__main__":
     config['obj_dof'] = 3
 
     screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
-
     chain = pk.build_chain_from_urdf(open(asset).read())
-    screwdriver_chain = pk.build_chain_from_urdf(open(screwdriver_asset).read())
+
     frame_indices = [chain.frame_to_idx[ee_names[finger]] for finger in config['fingers']]  # combined chain
     frame_indices = torch.tensor(frame_indices)
     state2ee_pos = partial(state2ee_pos, fingers=config['fingers'], chain=chain, frame_indices=frame_indices,
