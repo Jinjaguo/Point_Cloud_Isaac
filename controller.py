@@ -37,13 +37,6 @@ class Controller:
         self.c = c  # contact mode,binary variable
         self.pc = pc  # point cloud of the object
 
-    def get_estimated_pose(self, pc, o_sdf):
-        # estimate object pose from point cloud and signed distance field
-        sampled_surface_points = self.sample_surface_points(o_sdf)  # TODO: sample surface points from sdf
-        self.o_pose_ = self.icp(pc, sampled_surface_points)  # TODO: icp to estimate object pose
-        self.o_sdf_ = self.get_sdf(self.o_pose_)  # TODO: get sdf of estimated object pose
-        return self.o_pose_, self.o_sdf_
-
     def contact_point_function(self):
         w_1 = 0.1  # weight for contact point cost
         # forwards kinematics to get contact point
@@ -77,6 +70,7 @@ class Sample_Points():
 
         num_links = len(object_sdf.sdf.sdfs)
         for i, link_sdf in enumerate(object_sdf.sdf.sdfs):
+            # TODO check the function of sample_surface_points
             link_surface_points, _ = link_sdf.sample_surface_points(sample_points[i])
             all_points.append(link_surface_points)
             print(f"Link {i} - Sampled points shape: {link_surface_points.shape}")
@@ -254,10 +248,12 @@ if __name__ == "__main__":
     for file in os.listdir(point_cloud_folder):
         if file.endswith(".ply"):
             # table\ stick \ screwdriver body\ cap \ marker
-            n = [0, 100, 100, 0, 100]
+            n = [0, 100, 100, 100, 100]
             sp = Sample_Points(point_cloud_folder, screwdriver_asset, n)
             sample_points = sp.get_sample_points_sdf()
             point_cloud = sp.get_point_cloud(file)
 
             reg = points_registration()
             reg.get_pose_estimation(point_cloud, sample_points)
+            #here we output the transformation matrix
+            # TODO: use the transformation matrix to update the object pose in the diffusion model

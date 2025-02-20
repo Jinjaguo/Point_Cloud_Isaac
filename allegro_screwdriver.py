@@ -264,89 +264,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         thumb_and_middle_regrasp_planner = PositionControlConstrainedSVGDMPC(thumb_and_middle_regrasp_problem, params)
         turn_planner = PositionControlConstrainedSVGDMPC(turn_problem, params)
 
-
-    # elif params['controller'] == 'ipopt':
-    #     # index finger is used for stability
-    #     if 'index' in params['fingers']:
-    #         fingers = params['fingers']
-    #     else:
-    #         fingers = ['index'] + params['fingers']
-
-    #     # initial grasp
-    #     pregrasp_problem = IpoptScrewdriver(
-    #         start=start[:4 * num_fingers + obj_dof],
-    #         goal=params['valve_goal'] * 0,
-    #         T=params['T'],
-    #         chain=params['chain'],
-    #         device=params['device'],
-    #         object_asset_pos=env.table_pose,
-    #         object_location=params['object_location'],
-    #         object_type=params['object_type'],
-    #         world_trans=env.world_trans,
-    #         regrasp_fingers=fingers,
-    #         contact_fingers=[],
-    #         obj_dof=obj_dof,
-    #         obj_joint_dim=1,
-    #         optimize_force=params['optimize_force'],
-    #     )
-    #     # finger gate index
-    #     index_regrasp_problem = IpoptScrewdriver(
-    #         start=start[:4 * num_fingers + obj_dof],
-    #         goal=params['valve_goal'] * 0,
-    #         T=params['T'],
-    #         chain=params['chain'],
-    #         device=params['device'],
-    #         object_asset_pos=env.table_pose,
-    #         object_location=params['object_location'],
-    #         object_type=params['object_type'],
-    #         world_trans=env.world_trans,
-    #         regrasp_fingers=['index'],
-    #         contact_fingers=['middle', 'thumb'],
-    #         obj_dof=obj_dof,
-    #         obj_joint_dim=1,
-    #         optimize_force=params['optimize_force'],
-    #         default_dof_pos=env.default_dof_pos[:, :16]
-    #     )
-    #     thumb_and_middle_regrasp_problem = IpoptScrewdriver(
-    #         start=start[:4 * num_fingers + obj_dof],
-    #         goal=params['valve_goal'] * 0,
-    #         T=params['T'],
-    #         chain=params['chain'],
-    #         device=params['device'],
-    #         object_asset_pos=env.table_pose,
-    #         object_location=params['object_location'],
-    #         object_type=params['object_type'],
-    #         world_trans=env.world_trans,
-    #         contact_fingers=['index'],
-    #         regrasp_fingers=['middle', 'thumb'],
-    #         obj_dof=obj_dof,
-    #         obj_joint_dim=1,
-    #         optimize_force=params['optimize_force'],
-    #         default_dof_pos=env.default_dof_pos[:, :16]
-    #     )
-    #     turn_problem = IpoptScrewdriver(
-    #         start=start[:4 * num_fingers + obj_dof],
-    #         goal=params['valve_goal'] * 0,
-    #         T=params['T'],
-    #         chain=params['chain'],
-    #         device=params['device'],
-    #         object_asset_pos=env.table_pose,
-    #         object_location=params['object_location'],
-    #         object_type=params['object_type'],
-    #         world_trans=env.world_trans,
-    #         contact_fingers=['index', 'middle', 'thumb'],
-    #         obj_dof=obj_dof,
-    #         obj_joint_dim=1,
-    #         optimize_force=params['optimize_force'],
-    #         default_dof_pos=env.default_dof_pos[:, :16]
-    #     )
-    #     pregrasp_planner = IpoptMPC(pregrasp_problem, params)
-    #     index_regrasp_planner = IpoptMPC(index_regrasp_problem, params)
-    #     thumb_and_middle_regrasp_planner = IpoptMPC(thumb_and_middle_regrasp_problem, params)
-    #     turn_planner = IpoptMPC(turn_problem, params)
-    # else:
-    #     raise ValueError('Invalid controller')
-
     elif params['controller'] == 'diffusion_policy':
         if 'index' in params['fingers']:
             fingers = params['fingers']
@@ -511,19 +428,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         trajectory_sampler.send_norm_constants_to_submodels()
         print('Loaded trajectory sampler')
 
-    # start = env.get_state()['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
-    # best_traj, _ = pregrasp_planner.step(start[:4 * num_fingers + obj_dof])
-    #
-    # for x in best_traj[:, :4 * num_fingers]:
-    #     action = x.reshape(-1, 4 * num_fingers).to(device=env.device)  # move the rest fingers
-    #     if params['mode'] == 'hardware':
-    #         sim_viz_env.set_pose(env.get_state()['all_state'].to(device=env.device))
-    #         sim_viz_env.step(action)
-    #     env.step(action)
-    #     action_list.append(action)
-    #     if params['mode'] == 'hardware_copy':
-    #         ros_copy_node.apply_action(partial_to_full_state(x.reshape(-1, 4 * num_fingers)[0], params['fingers']))
-
 
     state = env.get_state()
     start = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
@@ -613,12 +517,12 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         # generate context from mode
         contact = -torch.ones(params['N'], 3).to(device=params['device'])
         if mode == 'thumb_middle':
-            contact[:, 0] = 1
+            contact[:, 0] = 1  # thumb contact and index contact
         elif mode == 'index':
             contact[:, 1] = 1
-            contact[:, 2] = 1
+            contact[:, 2] = 1 # thumb and index and middle contact
         elif mode == 'turn':
-            contact[:, :] = 1
+            contact[:, :] = 1 # all finger contact
 
         # generate initial samples with diffusion model
         sim_rollouts = None
@@ -676,7 +580,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         contact_distance = {
         }
         plans = None
-        resample = params.get('diffusion_resample', False)
+        resample = params.get('diffusion_resample', False) # false
 
         # save the point cloud and depth image of the screwdriver
         base_points_path= "./pointclouds"
@@ -1014,6 +918,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             perm = np.random.permutation(2)
             # perm = [0, 1]
             contact_sequence += [contact_options[perm[0]], contact_options[perm[1]], 'turn']
+            # ['turn', 'index', 'thumb_middle', 'turn', 'index', 'thumb_middle', 'turn', ...]
     else:
         contact_sequence = None
 

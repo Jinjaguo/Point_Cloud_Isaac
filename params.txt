@@ -1,0 +1,61 @@
+T: 12
+receding_horizon: False
+num_steps: 12
+num_turns: 3
+num_trials: 10
+visualize: True
+experiment_name: 'allegro_screwdriver_csvto_only_eps_.01_.5_damping_pi_6'
+mode: 'simulation'  # 可选值: 'simulation', 'hardware', 'hardware_copy'
+fingers: ['index', 'middle', 'thumb']
+object_type: 'screwdriver'
+sim_device: 'cuda'
+friction_coefficient: 1.0
+kp: 3.0
+heuristic: 1000
+max_depth: 11
+goal: -1.5
+prior: 1
+multi_particle_search: True
+replan: False
+visualize_plan: False
+optimize_force: True
+exclude_index: False
+projected: False
+use_saved_plans: True
+use_saved_noise: False
+use_guidance: False
+sample_contact: False
+use_partial_constraint: True
+sine_cosine: False
+
+# 末端执行器 (End-Effector) 名称
+ee_names:
+  index: 'allegro_hand_hitosashi_finger_finger_0_aftc_base_link'
+  middle: 'allegro_hand_naka_finger_finger_1_aftc_base_link'
+  ring: 'allegro_hand_kusuri_finger_finger_2_aftc_base_link'
+  thumb: 'allegro_hand_oya_finger_3_aftc_base_link'
+
+# 物体自由度
+obj_dof: 3
+
+# 控制器相关参数 (从 csvgd 提取)
+N: 16
+alpha_J: 0.01
+alpha_C: 1
+step_size: 0.1
+momentum: 0.0
+device: 'cuda:0'
+online_iters: 25
+warmup_iters: 100
+resample_steps: 16
+resample_sigma: 0.01
+resample_temperature: 0.1
+penalty: 1000000
+collision_checking: False
+joint_friction: 0.0
+
+# 其他关键参数
+controller: 'csvgd'
+valve_goal: tensor([ 0.0000,  0.0000, -1.5000], device='cuda:0')
+chain: <pytorch_kinematics.chain.Chain object at 0x795fa0245700>
+object_location: tensor([0.0000, 0.0000, 1.2050], device='cuda:0')
