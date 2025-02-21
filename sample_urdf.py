@@ -80,34 +80,43 @@ def transform_points(points, transform):
     return points_transformed
 
 
-def load_urdf_as_pointcloud(urdf_path, n_points_per_primitive=1000):
+def load_urdf_as_pointcloud(urdf_path):
     """
     读取URDF模型，并对几何原语进行表面点云采样。
     :param urdf_path: URDF 文件路径
-    :param n_points_per_primitive: 每个几何体的采样点数
     :return: open3d.geometry.PointCloud 对象
     """
     robot = URDF.load(urdf_path)
     all_points = []
 
+    target_links = {"screwdriver_stick", "screwdriver_body", "marker"}
+
     for link in robot.links:
+        print(link.name)
+        if link.name not in target_links:  # 只处理目标 link
+            continue
+
         for visual in link.visuals:
             geom = visual.geometry
             origin = visual.origin  # (4x4 变换矩阵)
-
-            if geom.box:
-                continue  # 忽略盒子
-                # size = geom.box.size
-                # sampled_points = sample_box(size, n_points_per_primitive)
-            elif geom.cylinder:
+            if link.name == "screwdriver_stick":  # 圆柱
                 radius = geom.cylinder.radius
                 length = geom.cylinder.length
-                sampled_points = sample_cylinder(radius, length, n_points_per_primitive)
-            else:
-                continue  # 其他类型不处理
-
-            transformed_points = transform_points(sampled_points, origin)
-            all_points.append(transformed_points)
+                sampled_points = sample_cylinder(radius, length, [3000, 20, 20])
+                transformed_points = transform_points(sampled_points, origin)
+                all_points.append(transformed_points)
+            elif link.name == "screwdriver_body":  # 长方体
+                radius = geom.cylinder.radius
+                length = geom.cylinder.length
+                sampled_points = sample_cylinder(radius, length, [1000, 10, 10])
+                transformed_points = transform_points(sampled_points, origin)
+                all_points.append(transformed_points)
+            elif link.name == "marker":
+                radius = geom.cylinder.radius
+                length = geom.cylinder.length
+                sampled_points = sample_cylinder(radius, length, [3000, 10, 10])
+                transformed_points = transform_points(sampled_points, origin)
+                all_points.append(transformed_points)
 
     if len(all_points) == 0:
         print("No valid geometry found in URDF.")
@@ -140,10 +149,10 @@ def remove_inertial_from_urdf(urdf_path):
 
 
 if __name__ == "__main__":
-    urdf_file = "./assets/screwdriver/screwdriver.urdf"
+    urdf_file = "./assets/screwdriver/screwdriver_limit.urdf"
     cleaned_urdf = remove_inertial_from_urdf(urdf_file)
 
-    model_pcd = load_urdf_as_pointcloud(cleaned_urdf, [500, 200, 200])
+    model_pcd = load_urdf_as_pointcloud(cleaned_urdf)
 
     if model_pcd is not None:
         o3d.visualization.draw_geometries([model_pcd])

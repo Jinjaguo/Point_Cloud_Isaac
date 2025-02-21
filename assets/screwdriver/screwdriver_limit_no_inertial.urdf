@@ -16,7 +16,7 @@
 <joint name="table_screwdriver_joint_1" type="revolute">
     <parent link="table" />
     <child link="vitrual_link_1" />
-    <origin rpy="0 0 0" xyz="0 0 0" /> 
+    <origin rpy="0 0 0" xyz="0 0 0" />
     <axis xyz="1 0 0" />
     <limit effort="10" lower="-1.57" upper="1.57" velocity="0.5" />
 </joint>
@@ -27,7 +27,7 @@
 <joint name="table_screwdriver_joint_2" type="revolute">
     <parent link="vitrual_link_1" />
     <child link="vitrual_link_2" />
-    <origin rpy="0 0 0" xyz="0 0 0" /> 
+    <origin rpy="0 0 0" xyz="0 0 0" />
     <axis xyz="0 1 0" />
     <limit effort="10" lower="-1.57" upper="1.57" velocity="0.5" />
 </joint>
@@ -38,13 +38,14 @@
 <joint name="table_screwdriver_joint_3" type="revolute">
     <parent link="vitrual_link_2" />
     <child link="screwdriver_stick" />
-    <origin rpy="0 0 0" xyz="0 0 0" /> 
+    <origin rpy="0 0 0" xyz="0 0 0" />
     <axis xyz="0 0 1" />
+    <limit effort="10" lower="-1.57" upper="1.57" velocity="0.5" />
 </joint>
 
 <link name="screwdriver_stick">
     <visual>
-        <origin rpy="0 0 0" xyz="0 0 0.05" />
+        <origin rpy="3.1416 0 0" xyz="0 0 -0.05" />
         <geometry>
             <cylinder length="0.1" radius="0.005" />
         </geometry>
@@ -63,8 +64,9 @@
 <joint name="screwdriver_stick_body_joint" type="fixed">
     <parent link="screwdriver_stick" />
     <child link="screwdriver_body" />
-    <origin rpy="0 0 0" xyz="0 0 0.1" /> 
+    <origin rpy="0 0 0" xyz="0 0 0.1" />
     <axis xyz="0 0 1" />
+    <limit effort="10" lower="-1.57" upper="1.57" velocity="0.5" />
 </joint>
 
 <link name="screwdriver_body">
@@ -90,8 +92,9 @@
 <joint name="screwdriver_body_cap_joint" type="revolute">
     <parent link="screwdriver_body" />
     <child link="screwdriver_cap" />
-    <origin rpy="0 0 0" xyz="0 0 0.1" /> 
+    <origin rpy="0 0 0" xyz="0 0 0.1" />
     <axis xyz="0 0 1" />
+    <limit effort="10" lower="-1.57" upper="1.57" velocity="0.5" />
 </joint>
 
 <link name="screwdriver_cap">
@@ -117,8 +120,9 @@
 <joint name="screwdriver_body_marker_joint" type="fixed">
     <parent link="screwdriver_body" />
     <child link="marker" />
-    <origin rpy="0 0 0" xyz="0 0 0" /> 
+    <origin rpy="0 0 0" xyz="0 0 0" />
     <axis xyz="0 0 1" />
+    <limit effort="10" lower="-1.57" upper="1.57" velocity="0.5" />
 </joint>
 
 <link name="marker">

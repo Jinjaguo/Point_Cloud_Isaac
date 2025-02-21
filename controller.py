@@ -10,6 +10,7 @@ from torch.fx.experimental.unification.multipledispatch.dispatcher import source
 
 sys.path.append('..')
 
+
 # import pytorch_volumetric as pv
 # import pytorch_kinematics as pk
 # from ccai.utils.allegro_utils import *
@@ -90,28 +91,121 @@ class points_registration():
         pass
 
     def get_pose_estimation(self, point_cloud, sampled_surface_points):
-        # estimate object pose from point cloud and signed distance field
-        source_point = point_cloud
-        target_point = sampled_surface_points
+        """
+        使用下采样、法向量估计、FPFH + RANSAC、ICP来对齐点云。
+        point_cloud:     (N,3) 的源点云 (numpy)
+        sampled_surface_points: (M,3) 的目标点云 (numpy)
+        """
+        # 1) 将 numpy 转成 open3d PointCloud
+        o3d_source = o3d.geometry.PointCloud()
+        o3d_source.points = o3d.utility.Vector3dVector(point_cloud)
 
-        threshold = 0.02
-        trans_init = np.asarray([[0.862, 0.011, -0.507, 0.5],
-                                 [-0.139, 0.967, -0.215, 0.7],
-                                 [0.487, 0.255, 0.835, -1.4], [0.0, 0.0, 0.0, 1.0]])
-        numbers = min(len(source_point), len(target_point))
-        print(f"source_point shape: {source_point.shape}, target_point shape: {target_point.shape}")
+        o3d_target = o3d.geometry.PointCloud()
+        o3d_target.points = o3d.utility.Vector3dVector(sampled_surface_points)
 
-        if len(source_point) > len(target_point):
-            idx = np.random.choice(target_point.shape[0], min(numbers, target_point.shape[0]), replace=False)
-            source_point = source_point[idx]
-        else:
-            idx = np.random.choice(source_point.shape[0], min(numbers, source_point.shape[0]), replace=False)
-            target_point = target_point[idx]
+        # 2) 下采样 (voxel_down_sample)
+        voxel_size = 0.005  # 体素大小，可根据实际情况调整
+        source_down = o3d_source.voxel_down_sample(voxel_size=voxel_size)
+        target_down = o3d_target.voxel_down_sample(voxel_size=voxel_size)
 
-        print(f"source_point shape: {source_point.shape}, target_point shape: {target_point.shape}")
-        T, _, _ = self.icp(source_point, target_point, init_pose=trans_init, max_iterations=20, tolerance=threshold)
-        print(T)
-        self.draw_registration_result(point_cloud, sampled_surface_points, T)
+        # 3) 计算法线 (estimate_normals)
+        #    若后面只做 Point-to-Point ICP，法向量可选；若做 Point-to-Plane ICP，必须要法线
+        source_down.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                radius=voxel_size * 2.0,
+                max_nn=30
+            )
+        )
+        target_down.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                radius=voxel_size * 2.0,
+                max_nn=30
+            )
+        )
+
+        # 4) 计算 FPFH 特征
+        radius_feature = voxel_size * 5  # 特征搜索半径
+
+        # 计算 FPFH 特征
+        source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+            source_down,
+            o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100)
+        )
+        target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+            target_down,
+            o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100)
+        )
+
+        # 5) RANSAC 全局匹配，得到初始变换
+        distance_threshold = voxel_size * 3.0  # RANSAC距离阈值
+        print("[RANSAC] start...")
+        result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+            source_down,
+            target_down,
+            source_fpfh,
+            target_fpfh,
+            False,  # <-- mutual_filter: bool
+            distance_threshold,  # <-- max_correspondence_distance: float
+            o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+            5,  # ransac_n
+            [
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
+            ],
+            o3d.pipelines.registration.RANSACConvergenceCriteria(5000000, 0.9999)
+        )
+        print("[RANSAC] done. Initial transform:\n", result_ransac.transformation)
+
+        # 6) 使用 ICP 做精细对齐 (从 RANSAC 的变换矩阵开始)
+        o3d_target.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                radius=voxel_size * 2.0,
+                max_nn=30
+            )
+        )
+        print("[ICP] start...")
+        # 第 1 轮 ICP：大范围粗对齐
+        icp_threshold_coarse = voxel_size * 2.0
+        result_icp_coarse = o3d.pipelines.registration.registration_icp(
+            source=o3d_source,
+            target=o3d_target,
+            max_correspondence_distance=icp_threshold_coarse,
+            init=result_ransac.transformation,  # 使用 RANSAC 结果作为初始变换
+            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=200)
+        )
+
+        # 第 2 轮 ICP：小范围精细对齐
+        icp_threshold_fine = voxel_size * 0.5
+        result_icp_fine = o3d.pipelines.registration.registration_icp(
+            source=o3d_source,
+            target=o3d_target,
+            max_correspondence_distance=icp_threshold_fine,
+            init=result_icp_coarse.transformation,  # 用第一轮 ICP 的结果作为初始变换
+            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=500)
+        )
+
+        print("[ICP] Final Transform:\n", result_icp_fine.transformation)
+
+        # 7) 可视化
+        self.draw_registration_result(np.asarray(o3d_source.points),
+                                      np.asarray(o3d_target.points),
+                                      result_icp_fine.transformation)
+
+    def add_noise_to_ply(self, points, noise_std=0.001):
+        """
+        每个点坐标上添加随机高斯噪声后，保存输出一个新的np。
+
+        :param points:  已转为np的原始点云
+        :param noise_std:  噪声标准差 (float), 越大噪声越强
+        """
+        #  添加随机高斯噪声
+        #    np.random.normal(mean, std, size=...) 生成指定形状的高斯噪声
+        noise = np.random.normal(loc=0.0, scale=noise_std, size=points.shape)
+        points_noisy = points + noise
+
+        return points_noisy
 
     def draw_registration_result(self, source, target, transformation):
         source_temp = copy.deepcopy(source)
@@ -126,6 +220,10 @@ class points_registration():
         target_temp.paint_uniform_color([0, 0.651, 0.929])
         source_temp.transform(transformation)
         o3d.visualization.draw_geometries([source_temp, target_temp])
+
+
+"""
+ 
 
     def best_fit_transform(self, A, B):
         '''
@@ -240,13 +338,13 @@ class points_registration():
         T, _, _ = self.best_fit_transform(A, src[:m, :].T)
 
         return T, distances, i
-
+"""
 
 if __name__ == "__main__":
 
-    point_cloud_folder = './pointclouds/run_1/screwdriver_only'
+    point_cloud_folder = './pointclouds/run_7/screwdriver_only'
     # screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
-    screwdriver_asset = f'./assets/screwdriver/screwdriver_6d_back.urdf'
+    screwdriver_asset = f'./assets/screwdriver/screwdriver.urdf'
     screwdriver = 'screwdriver_pcd.ply'
 
     for file in os.listdir(point_cloud_folder):
@@ -258,6 +356,7 @@ if __name__ == "__main__":
             point_cloud = sp.get_point_cloud(file)
 
             reg = points_registration()
+            point_cloud = reg.add_noise_to_ply(point_cloud)
             sample_points = o3d.io.read_point_cloud(screwdriver)
             pc = np.asarray(sample_points.points)
             reg.get_pose_estimation(point_cloud, pc)
