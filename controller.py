@@ -1,18 +1,18 @@
 import numpy as np
 import os
 import open3d as o3d
-from isaac_victor_envs.utils import get_assets_dir
+# from isaac_victor_envs.utils import get_assets_dir
 import sys
-from pytorch_volumetric import sdf
+# from pytorch_volumetric import sdf
 import copy
 from sklearn.neighbors import NearestNeighbors
 from torch.fx.experimental.unification.multipledispatch.dispatcher import source
 
 sys.path.append('..')
 
-import pytorch_volumetric as pv
-import pytorch_kinematics as pk
-from ccai.utils.allegro_utils import *
+# import pytorch_volumetric as pv
+# import pytorch_kinematics as pk
+# from ccai.utils.allegro_utils import *
 
 
 class Controller:
@@ -47,7 +47,7 @@ class Controller:
 
 
 class Sample_Points():
-    def __init__(self, point_cloud_folder, screwdriver_asset, sample_numbers ):
+    def __init__(self, point_cloud_folder, screwdriver_asset, sample_numbers):
         self.folder = point_cloud_folder
         self.screwdriver_asset = screwdriver_asset
         self.sample_numbers = sample_numbers
@@ -81,11 +81,13 @@ class Sample_Points():
 
         return sampled_surface_points.numpy()
 
+    def get_sample_points_urdf(self):
+        sample_points = self.sample_numbers
+
 
 class points_registration():
     def __init__(self):
         pass
-
 
     def get_pose_estimation(self, point_cloud, sampled_surface_points):
         # estimate object pose from point cloud and signed distance field
@@ -107,12 +109,11 @@ class points_registration():
             target_point = target_point[idx]
 
         print(f"source_point shape: {source_point.shape}, target_point shape: {target_point.shape}")
-        T, _, _ = self.icp(source_point, target_point, init_pose = trans_init, max_iterations=20, tolerance=threshold)
+        T, _, _ = self.icp(source_point, target_point, init_pose=trans_init, max_iterations=20, tolerance=threshold)
         print(T)
         self.draw_registration_result(point_cloud, sampled_surface_points, T)
 
-
-    def draw_registration_result(self,source, target, transformation):
+    def draw_registration_result(self, source, target, transformation):
         source_temp = copy.deepcopy(source)
         source_temp = o3d.geometry.PointCloud()
         source_temp.points = o3d.utility.Vector3dVector(source)
@@ -126,7 +127,7 @@ class points_registration():
         source_temp.transform(transformation)
         o3d.visualization.draw_geometries([source_temp, target_temp])
 
-    def best_fit_transform(self,A, B):
+    def best_fit_transform(self, A, B):
         '''
         Calculates the least-squares best-fit transform that maps corresponding points A to B in m spatial dimensions
         Input:
@@ -187,7 +188,7 @@ class points_registration():
         distances, indices = neigh.kneighbors(src, return_distance=True)
         return distances.ravel(), indices.ravel()
 
-    def icp(self,A, B, init_pose=None, max_iterations=20, tolerance=0.001):
+    def icp(self, A, B, init_pose=None, max_iterations=20, tolerance=0.001):
         '''
         The Iterative Closest Point method: finds best-fit transform that maps points A on to points B
         Input:
@@ -240,20 +241,25 @@ class points_registration():
 
         return T, distances, i
 
+
 if __name__ == "__main__":
 
     point_cloud_folder = './pointclouds/run_1/screwdriver_only'
-    screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
+    # screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
+    screwdriver_asset = f'./assets/screwdriver/screwdriver_6d_back.urdf'
+    screwdriver = 'screwdriver_pcd.ply'
 
     for file in os.listdir(point_cloud_folder):
         if file.endswith(".ply"):
             # table\ stick \ screwdriver body\ cap \ marker
             n = [0, 100, 100, 100, 100]
             sp = Sample_Points(point_cloud_folder, screwdriver_asset, n)
-            sample_points = sp.get_sample_points_sdf()
+            # sample_points = sp.get_sample_points_sdf()
             point_cloud = sp.get_point_cloud(file)
 
             reg = points_registration()
-            reg.get_pose_estimation(point_cloud, sample_points)
-            #here we output the transformation matrix
+            sample_points = o3d.io.read_point_cloud(screwdriver)
+            pc = np.asarray(sample_points.points)
+            reg.get_pose_estimation(point_cloud, pc)
+            # here we output the transformation matrix
             # TODO: use the transformation matrix to update the object pose in the diffusion model
