@@ -50,6 +50,30 @@ def process_folder(folder_path):
             ply_file = os.path.join(folder_path, file_name)
             process_ply_file(ply_file, save_dir)
 
+
+def process_one_pcd(pcd):
+    if not pcd.has_points():
+        print(f"Warning: The file doesn't contain any points!")
+        return
+    points = np.asarray(pcd.points)
+
+    # DBSCAN聚类
+    labels = np.array(pcd.cluster_dbscan(eps=0.02, min_points=10))
+
+    # 选择特定簇（这里默认选择ID为0的簇，你可能需要调整）
+    screwdriver_cluster_id = 0
+    screwdriver_points = points[labels == screwdriver_cluster_id]
+
+    # 创建新的点云对象
+    screwdriver_pcd = o3d.geometry.PointCloud()
+    screwdriver_pcd.points = o3d.utility.Vector3dVector(screwdriver_points)
+
+    screwdriver_pcd_np = np.array(screwdriver_pcd.points)
+    return screwdriver_pcd_np
+
+
+
+
 if __name__ == "__main__":
     folder_path = './pointclouds/run_7/'
     process_folder(folder_path)

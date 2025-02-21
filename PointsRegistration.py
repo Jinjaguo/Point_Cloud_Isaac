@@ -16,37 +16,6 @@ sys.path.append('..')
 # from ccai.utils.allegro_utils import *
 
 
-class Controller:
-    def __init__(self, q,
-                 q_,
-                 o_pose,
-                 o_pose_,
-                 o_sdf,
-                 o_sdf_,
-                 u,
-                 u_star,
-                 c,
-                 pc):
-        self.q = q  # state from diffusion model
-        self.q_ = q_  # observed state
-        self.o_pose = o_pose  # object state from diffusion model
-        self.o_pose_ = None  # observed object state
-        self.o_sdf = o_sdf  # signed distance field of the object
-        self.o_sdf_ = None  # observed signed distance field of the object
-        self.u = u  # action from diffusion model
-        self.u_star = u_star  # action we want to take
-        self.c = c  # contact mode,binary variable
-        self.pc = pc  # point cloud of the object
-
-    def contact_point_function(self):
-        w_1 = 0.1  # weight for contact point cost
-        # forwards kinematics to get contact point
-        ee_point = self.forward_kinematics(self.q)  # TODO get the real contact point
-        contact_point = self.get_contact_point(self.q, self.o_sdf)  # TODO: get the contact point from sdf
-        J_c = w_1 * np.linalg.norm(contact_point - ee_point)
-        return J_c
-
-
 class Sample_Points():
     def __init__(self, point_cloud_folder, screwdriver_asset, sample_numbers):
         self.folder = point_cloud_folder
@@ -138,7 +107,18 @@ class points_registration():
 
         # 5) RANSAC 全局匹配，得到初始变换
         distance_threshold = voxel_size * 3.0  # RANSAC距离阈值
+
+        # 初始变换
+        T_prior = np.array([[-0.30994213, -0.95047922, -0.02291554, -0.4907927],
+                            [0.63234811, -0.18808425, -0.75150528, -0.14738579],
+                            [0.70998011, -0.24741374, 0.65932897, 0.02680285],
+                            [0., 0., 0., 1.]])
+        """
+        
+        """
         print("[RANSAC] start...")
+        import time
+        time_start = time.time()
         result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
             source_down,
             target_down,
@@ -152,9 +132,55 @@ class points_registration():
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
             ],
-            o3d.pipelines.registration.RANSACConvergenceCriteria(5000000, 0.9999)
+            o3d.pipelines.registration.RANSACConvergenceCriteria(500000, 0.999)
         )
-        print("[RANSAC] done. Initial transform:\n", result_ransac.transformation)
+
+        T_ransac = result_ransac.transformation
+        # blend_transform
+        R1, t1 = T_prior[:3, :3], T_prior[:3, 3]
+        R2, t2 = T_ransac[:3, :3], T_ransac[:3, 3]
+
+        import transforms3d
+        q1 = transforms3d.quaternions.mat2quat(R1)  # 返回(w, x, y, z)
+        q2 = transforms3d.quaternions.mat2quat(R2)
+
+        def slerp_quaternion(q1, q2, alpha):
+            """
+            用 scipy.spatial.transform 的 Slerp 对两个四元数做球面线性插值。
+              q1, q2: [w, x, y, z] 格式的四元数 (numpy 数组)
+              alpha: 取值 [0,1], alpha=0 -> q1, alpha=1 -> q2
+            返回插值后的四元数 [w, x, y, z]
+            """
+            from scipy.spatial.transform import Rotation
+            # 1) 构造两个 Rotation
+            r1 = Rotation.from_quat([q1[1], q1[2], q1[3], q1[0]])  # 注意: scipy是 [x, y, z, w]
+            r2 = Rotation.from_quat([q2[1], q2[2], q2[3], q2[0]])
+
+            # 2) Slerp 需要 key_times 和对应的 Rotation 列表
+            times = [0, 1]  # 两个关键帧
+            rots = Rotation.concatenate([r1, r2])
+
+            from scipy.spatial.transform import Slerp
+            slerp = Slerp(times, rots)
+
+            # 3) 在 [0,1] 之间插值
+            r_blend = slerp([alpha])  # 返回 Rotation 对象数组
+            # 取第 0 个结果
+            r_blend = r_blend[0]
+
+            # 4) 转回 [w, x, y, z] 格式
+            x, y, z, w = r_blend.as_quat()
+            return np.array([w, x, y, z], dtype=np.float64)
+        alpha = 0.01  # 线性插值权重,更相信先验结果
+        q_blend = slerp_quaternion(q1, q2, alpha)
+        t_blend = (1.0 - alpha) * t1 + alpha * t2
+        R_blend = transforms3d.quaternions.quat2mat(q_blend)
+        T_blend = np.eye(4)
+        T_blend[:3, :3] = R_blend
+        T_blend[:3, 3] = t_blend
+
+        print("[RANSAC] done. Initial transform:\n", T_blend)
+
 
         # 6) 使用 ICP 做精细对齐 (从 RANSAC 的变换矩阵开始)
         o3d_target.estimate_normals(
@@ -170,7 +196,7 @@ class points_registration():
             source=o3d_source,
             target=o3d_target,
             max_correspondence_distance=icp_threshold_coarse,
-            init=result_ransac.transformation,  # 使用 RANSAC 结果作为初始变换
+            init=T_blend,  #
             estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(),
             criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=200)
         )
@@ -185,13 +211,15 @@ class points_registration():
             estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
             criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=500)
         )
-
+        time_end = time.time()
+        time = time_end - time_start
+        print(f"Time used for ICP: {time:.2f}s")
         print("[ICP] Final Transform:\n", result_icp_fine.transformation)
 
         # 7) 可视化
-        self.draw_registration_result(np.asarray(o3d_source.points),
-                                      np.asarray(o3d_target.points),
-                                      result_icp_fine.transformation)
+        # self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
+
+        return result_icp_fine.transformation
 
     def add_noise_to_ply(self, points, noise_std=0.001):
         """
@@ -342,7 +370,7 @@ class points_registration():
 
 if __name__ == "__main__":
 
-    point_cloud_folder = './pointclouds/run_7/screwdriver_only'
+    point_cloud_folder = './pointclouds/run_2/screwdriver_only'
     # screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
     screwdriver_asset = f'./assets/screwdriver/screwdriver.urdf'
     screwdriver = 'screwdriver_pcd.ply'

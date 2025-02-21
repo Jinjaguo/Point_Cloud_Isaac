@@ -600,8 +600,22 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             if depth_tensor is not None:
                 # print('successfully get the depth image')
                 points = env.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
-                env.save_point_clouds(points, points_path)
+                pcd = env.save_point_clouds(points, points_path)
 
+                # segmentation
+                from segmentation_pc import process_one_pcd
+                screwdriver_pcd_np = process_one_pcd(pcd)
+
+                # registration
+                from PointsRegistration import points_registration
+                reg = points_registration()
+                point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
+                sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
+                pc = np.asarray(sample_points.points)
+                T = reg.get_pose_estimation(point_cloud, pc)
+
+                env.set_screwdriver_pose(T, env_idx=0)    # save the registration result
+                print('--------------we have successfully set the pose of the screwdriver---------------')
             # print('successfully get the point cloud of the screwdriver')
             state = env.get_state()
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
