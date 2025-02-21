@@ -612,10 +612,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
                 sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
                 pc = np.asarray(sample_points.points)
-                T = reg.get_pose_estimation(point_cloud, pc)
+                T_icp = reg.get_pose_estimation(point_cloud, pc)
 
-                env.set_screwdriver_pose(T, env_idx=0)    # save the registration result
-                print('--------------we have successfully set the pose of the screwdriver---------------')
+                env.set_screwdriver_pose(T_icp, env_idx=0)    # save the registration result
             # print('successfully get the point cloud of the screwdriver')
             state = env.get_state()
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
@@ -672,6 +671,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                 dim=2).detach().cpu()
 
             # execute the action
+            env.set_screwdriver_pose(T_icp, env_idx=0)
             state = env.get_state()
             state = state['q'].reshape(-1).to(device=params['device'])
             ori = state[:15][-3:]
@@ -911,10 +911,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         torch.cuda.empty_cache()
         return contact_sequence, next_node, initial_samples
 
-    state = env.get_state()
-    state = state['q'].reshape(-1)[:15].to(device=params['device'])
-
-
     contact_label_to_vec = {'pregrasp': 0,
                             'index': 2,
                             'thumb_middle': 1,
@@ -942,12 +938,12 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
     # return -1
     contact = None
     next_node = None
-    state = env.get_state()
-    state = state['q'].reshape(-1)[:15].to(device=params['device'])
+
 
     executed_contacts = []
     stages_since_plan = 0
     for stage in range(num_stages):
+
         state = env.get_state()
         state = state['q'].reshape(-1)[:15].to(device=params['device'])
         ori = state[:15][-3:]
