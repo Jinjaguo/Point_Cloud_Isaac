@@ -1145,40 +1145,77 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
         print(f"✅✅✅✅ updated screwdriver pose: rotation={euler_xyz}, yaw={yaw}")
         print('--------------we have successfully set the pose of the screwdriver---------------')
 
-    def get_state(self):
+    def get_state(self, orb_flag = False):
         results = super(AllegroScrewdriverTurningEnv, self).get_state()
-        screwdriver_ori_euler = self._q[:, -4:-1]
-        screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
-        screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
 
-        results['screwdriver_ori_euler'] = screwdriver_ori_euler
-        results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
-        # results['screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-        results[
-            'screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
-        results['screwdriver_angle'] = self._q[:, -1:]
-        # gt_quat = R.from_euler('XYZ', screwdriver_ori_euler).as_quat()
-        # temp_euler = torch.stack((screwdriver_ori_euler[:, 2], screwdriver_ori_euler[:, 1], screwdriver_ori_euler[:, 0]), dim=1).double()
-        # change the order of the euler angle since the pytorch3d only supports fixed axis euler angle
-        # temp1 = torch3d_tf.matrix_to_quaternion(torch3d_tf.euler_angles_to_matrix(screwdriver_ori_euler, 'XYZ'))
-        # temp1 = torch.cat((temp1[..., 1:], temp1[...,:1]), dim=-1)
-        # print(self.rb_states[-3, 3:7] - temp1)
+        if orb_flag: # 选择使用观测点云作为输入
 
-        results['screwdriver_ori_euler'] = screwdriver_ori_euler
-        results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
-        results[
-            'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-        # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
-        results['screwdriver_angle'] = self._q[:, -1:]
-        q = []
-        if self.arm_type != 'None':
-            q.append(results['arm_q'])
-        for finger in self.fingers:
-            q.append(results[f'{finger}_q'])
-        q.append(results['screwdriver_ori'])
-        q.append(results['screwdriver_angle'])
-        q = torch.cat(q, dim=1)
-        results['q'] = q
+            # 定义点云和图象保存路径
+            base_points_path = "./pointclouds"
+            base_pics_path = "./pics"
+            pics_path = self.get_new_folder(base_pics_path)
+            points_path = self.get_new_folder(base_points_path)
+
+            # 创建姿态和位置的列表用于后面比对
+            ori_list = []
+            pos_list = []
+
+            depth_tensor, mask_tensor = self.get_depth_image(pics_path)
+
+            if depth_tensor is not None:
+                # print('successfully get the depth image')
+                points = self.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
+                pcd = self.save_point_clouds(points, points_path)
+
+                # segmentation
+                from segmentation_pc import process_one_pcd
+                screwdriver_pcd_np = process_one_pcd(pcd)
+
+                # registration
+                from PointsRegistration import points_registration
+                import open3d as o3d
+                reg = points_registration()
+                point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
+                sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
+                pc = np.asarray(sample_points.points)
+                T_icp = reg.get_pose_estimation(point_cloud, pc)
+
+                self.set_screwdriver_pose(T_icp, env_idx=0)
+
+
+        else:
+            screwdriver_ori_euler = self._q[:, -4:-1]
+            screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
+            screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
+
+            results['screwdriver_ori_euler'] = screwdriver_ori_euler
+            results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
+            # results['screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
+            results[
+                'screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+            results['screwdriver_angle'] = self._q[:, -1:]
+            # gt_quat = R.from_euler('XYZ', screwdriver_ori_euler).as_quat()
+            # temp_euler = torch.stack((screwdriver_ori_euler[:, 2], screwdriver_ori_euler[:, 1], screwdriver_ori_euler[:, 0]), dim=1).double()
+            # change the order of the euler angle since the pytorch3d only supports fixed axis euler angle
+            # temp1 = torch3d_tf.matrix_to_quaternion(torch3d_tf.euler_angles_to_matrix(screwdriver_ori_euler, 'XYZ'))
+            # temp1 = torch.cat((temp1[..., 1:], temp1[...,:1]), dim=-1)
+            # print(self.rb_states[-3, 3:7] - temp1)
+
+            results['screwdriver_ori_euler'] = screwdriver_ori_euler
+            results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
+            results[
+                'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
+            # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+            results['screwdriver_angle'] = self._q[:, -1:]
+            q = []
+            if self.arm_type != 'None':
+                q.append(results['arm_q'])
+            for finger in self.fingers:
+                q.append(results[f'{finger}_q'])
+            q.append(results['screwdriver_ori'])
+            q.append(results['screwdriver_angle'])
+            q = torch.cat(q, dim=1)
+            results['q'] = q
         return results
 
 
