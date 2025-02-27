@@ -1182,18 +1182,27 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
 
                 self.set_screwdriver_pose(T_icp, env_idx=0)
 
+                screwdriver_ori_euler = self._q[:, -4:-1]
+                screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
+                screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
+                results['screwdriver_ori_euler'] = screwdriver_ori_euler
+                results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
+                results[
+                    'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
+                # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+                results['screwdriver_angle'] = self._q[:, -1:]
+
 
         else:
             screwdriver_ori_euler = self._q[:, -4:-1]
             screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
             screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
 
-            results['screwdriver_ori_euler'] = screwdriver_ori_euler
-            results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
+            # results['screwdriver_ori_euler'] = screwdriver_ori_euler
+            # results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
             # results['screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-            results[
-                'screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
-            results['screwdriver_angle'] = self._q[:, -1:]
+            # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+            # results['screwdriver_angle'] = self._q[:, -1:]
             # gt_quat = R.from_euler('XYZ', screwdriver_ori_euler).as_quat()
             # temp_euler = torch.stack((screwdriver_ori_euler[:, 2], screwdriver_ori_euler[:, 1], screwdriver_ori_euler[:, 0]), dim=1).double()
             # change the order of the euler angle since the pytorch3d only supports fixed axis euler angle
@@ -1207,15 +1216,16 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
                 'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
             # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
             results['screwdriver_angle'] = self._q[:, -1:]
-            q = []
-            if self.arm_type != 'None':
-                q.append(results['arm_q'])
-            for finger in self.fingers:
-                q.append(results[f'{finger}_q'])
-            q.append(results['screwdriver_ori'])
-            q.append(results['screwdriver_angle'])
-            q = torch.cat(q, dim=1)
-            results['q'] = q
+        q = []
+        if self.arm_type != 'None':
+            q.append(results['arm_q'])
+        for finger in self.fingers:
+            q.append(results[f'{finger}_q'])
+        q.append(results['screwdriver_ori'])
+        q.append(results['screwdriver_angle'])
+        q = torch.cat(q, dim=1)
+        results['q'] = q
+
         return results
 
 
