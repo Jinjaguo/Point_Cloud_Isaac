@@ -72,6 +72,11 @@ class points_registration():
         o3d_target = o3d.geometry.PointCloud()
         o3d_target.points = o3d.utility.Vector3dVector(sampled_surface_points)
 
+        bbox1 = o3d_source.get_axis_aligned_bounding_box()
+        bbox2 = o3d_target.get_axis_aligned_bounding_box()
+        print("Point Cloud Bounding Box:", bbox1)
+        print("URDF Sample Bounding Box:", bbox2)
+
         # 2) 下采样 (voxel_down_sample)
         voxel_size = 0.005  # 体素大小，可根据实际情况调整
         source_down = o3d_source.voxel_down_sample(voxel_size=voxel_size)
@@ -113,10 +118,8 @@ class points_registration():
                             [0.63234811, -0.18808425, -0.75150528, -0.14738579],
                             [0.70998011, -0.24741374, 0.65932897, 0.02680285],
                             [0., 0., 0., 1.]])
-        """
-        
-        """
-        print("[RANSAC] start...")
+
+        # print("[RANSAC] start...")
         import time
         time_start = time.time()
         result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
@@ -132,7 +135,7 @@ class points_registration():
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
             ],
-            o3d.pipelines.registration.RANSACConvergenceCriteria(500000, 0.999)
+            o3d.pipelines.registration.RANSACConvergenceCriteria(500000, 0.9999)
         )
 
         T_ransac = result_ransac.transformation
@@ -179,7 +182,7 @@ class points_registration():
         T_blend[:3, :3] = R_blend
         T_blend[:3, 3] = t_blend
 
-        print("[RANSAC] done. Initial transform:\n", T_blend)
+        # print("[RANSAC] done. Initial transform:\n", T_blend)
 
 
         # 6) 使用 ICP 做精细对齐 (从 RANSAC 的变换矩阵开始)
@@ -189,7 +192,7 @@ class points_registration():
                 max_nn=30
             )
         )
-        print("[ICP] start...")
+        # print("[ICP] start...")
         # 第 1 轮 ICP：大范围粗对齐
         icp_threshold_coarse = voxel_size * 2.0
         result_icp_coarse = o3d.pipelines.registration.registration_icp(
@@ -213,11 +216,11 @@ class points_registration():
         )
         time_end = time.time()
         time = time_end - time_start
-        print(f"Time used for ICP: {time:.2f}s")
-        print("[ICP] Final Transform:\n", result_icp_fine.transformation)
+        # print(f"Time used for ICP: {time:.2f}s")
+        # print("[ICP] Final Transform:\n", result_icp_fine.transformation)
 
         # 7) 可视化
-        # self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
+        self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
 
         return result_icp_fine.transformation
 
@@ -368,25 +371,3 @@ class points_registration():
         return T, distances, i
 """
 
-if __name__ == "__main__":
-
-    point_cloud_folder = './pointclouds/run_2/screwdriver_only'
-    # screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver_6d_back.urdf'
-    screwdriver_asset = f'./assets/screwdriver/screwdriver.urdf'
-    screwdriver = 'screwdriver_pcd.ply'
-
-    for file in os.listdir(point_cloud_folder):
-        if file.endswith(".ply"):
-            # table\ stick \ screwdriver body\ cap \ marker
-            n = [0, 100, 100, 100, 100]
-            sp = Sample_Points(point_cloud_folder, screwdriver_asset, n)
-            # sample_points = sp.get_sample_points_sdf()
-            point_cloud = sp.get_point_cloud(file)
-
-            reg = points_registration()
-            point_cloud = reg.add_noise_to_ply(point_cloud)
-            sample_points = o3d.io.read_point_cloud(screwdriver)
-            pc = np.asarray(sample_points.points)
-            reg.get_pose_estimation(point_cloud, pc)
-            # here we output the transformation matrix
-            # TODO: use the transformation matrix to update the object pose in the diffusion model

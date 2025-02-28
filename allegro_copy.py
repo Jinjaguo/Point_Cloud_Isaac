@@ -736,7 +736,7 @@ class AllegroEnv:
         os.makedirs(new_folder, exist_ok=True)
         return new_folder
 
-    def get_depth_image(self, save_dir, env_index=0):
+    def get_depth_image(self, env_index=0):
         """
         get the depth image of the specified environment
         Args:
@@ -760,7 +760,7 @@ class AllegroEnv:
         self.gym.step_graphics(self.sim)
         self.gym.render_all_camera_sensors(self.sim)
 
-        import datetime
+        # import datetime
         # timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
         # filename = f"color_pic_{timestamp}.png"
         # self.gym.write_camera_image_to_file(self.sim, self.envs[env_index], camera_handle, gymapi.IMAGE_COLOR, f"{save_dir}/{filename}")
@@ -782,18 +782,6 @@ class AllegroEnv:
             gymapi.IMAGE_SEGMENTATION
         )
         seg_tensor = gymtorch.wrap_tensor(seg_tensor)
-        # print(f"Segmentation tensor shape: {seg_tensor.shape}")
-
-        # convert depth image to rgba image
-        # from PIL import Image
-        # depth_display = torch.clamp(raw_depth_tensor, -1, 1)
-        # depth_display = scale(
-        #     depth_display,
-        #     to_torch([0], dtype=torch.float, device=self.device),
-        #     to_torch([255], dtype=torch.float, device=self.device)
-        # )
-        # camera_image = Image.fromarray(depth_display.cpu().numpy())
-        # camera_image.show("depth_vis.png")
 
         return depth_tensor_for_pointcloud, seg_tensor
 
@@ -892,6 +880,183 @@ class AllegroEnv:
         save_path = os.path.join(save_dir, "pose_ori.csv")
         df.to_csv(save_path, index=False)
         print(f"Saved data to: {save_path}")
+
+    def set_screwdriver_pose(self, T_icp, env_idx=0, q_guess=None):
+        """
+        根据外部观测(ICP)的 4x4 变换矩阵 T_icp，使用数值IK解出螺丝刀的关节角 (q1,q2,q3,q4)，
+        并返回与原先 [roll, pitch, yaw, screwdriver_angle] 风格一致的 new_pose。
+        """
+        import numpy as np
+        from scipy.spatial.transform import Rotation as R
+        import scipy.optimize as opt
+        import torch
+
+        # 1) 关节上下限 (根据 URDF limit)
+        if q_guess is None:
+            q_guess = np.zeros(4)
+
+        # 2) 关节上下限 (根据 URDF limit)
+        bounds = [(-1.57, 1.57),  # q1 -> joint_1, axis x
+                  (-1.57, 1.57),  # q2 -> joint_2, axis y
+                  (-3.14, 3.14),  # q3 -> joint_3, axis z
+                  (-3.14, 3.14)]  # q4 -> body_cap_joint, axis z
+
+        # === 需要先定义自己的 FK 和 cost_func ===#
+        def fk_screwdriver(q):
+            """
+            简化演示版：给定4个角度(弧度)，返回 base->cap 的 4x4 变换矩阵
+            具体实现要和你的 URDF 关节顺序对应
+            """
+            from math import sin, cos
+            Rx = np.array([[1, 0, 0, 0],
+                           [0, cos(q[0]), -sin(q[0]), 0],
+                           [0, sin(q[0]), cos(q[0]), 0],
+                           [0, 0, 0, 1]], dtype=np.float32)
+
+            Ry = np.array([[cos(q[1]), 0, sin(q[1]), 0],
+                           [0, 1, 0, 0],
+                           [-sin(q[1]), 0, cos(q[1]), 0],
+                           [0, 0, 0, 1]], dtype=np.float32)
+
+            Rz = np.array([[cos(q[2]), -sin(q[2]), 0, 0],
+                           [sin(q[2]), cos(q[2]), 0, 0],
+                           [0, 0, 1, 0],
+                           [0, 0, 0, 1]], dtype=np.float32)
+
+            # 固定关节 stick->body (xyz=0,0,0.1)
+            T_sb = np.array([[1, 0, 0, 0],
+                             [0, 1, 0, 0],
+                             [0, 0, 1, 0.1],
+                             [0, 0, 0, 1]], dtype=np.float32)
+
+            # body_cap_joint: 先平移(0,0,0.1)，再绕z(q[3])
+            T_bc = np.array([[1, 0, 0, 0],
+                             [0, 1, 0, 0],
+                             [0, 0, 1, 0.1],
+                             [0, 0, 0, 1]], dtype=np.float32)
+            Rz4 = np.array([[cos(q[3]), -sin(q[3]), 0, 0],
+                            [sin(q[3]), cos(q[3]), 0, 0],
+                            [0, 0, 1, 0],
+                            [0, 0, 0, 1]], dtype=np.float32)
+            T_bc = T_bc @ Rz4
+
+            T_base_cap = Rx @ Ry @ Rz @ T_sb @ T_bc
+            return T_base_cap
+
+        def pose_error(q, T_target):
+            """
+            计算(q1,q2,q3,q4)与目标T_target的位姿误差，用于数值优化
+            """
+            from scipy.spatial.transform import Rotation as R
+            T = fk_screwdriver(q)
+            # 平移误差
+            trans_err = T[:3, 3] - T_target[:3, 3]
+            # 旋转误差(用旋转向量差)
+            R_current = R.from_matrix(T[:3, :3])
+            R_target = R.from_matrix(T_target[:3, :3].copy())
+            rot_err = R_current.as_rotvec() - R_target.as_rotvec()
+            return np.concatenate([trans_err, rot_err])
+
+        def cost_func(q):
+            err = pose_error(q, T_icp)
+            return (err ** 2).sum()
+
+        # === 数值优化 ===#
+        res = opt.minimize(cost_func, q_guess, method='SLSQP', bounds=bounds)
+        q_sol = res.x  # 得到 [q1, q2, q3, q4]
+
+        # -----------------------------------------
+        # 下面把 [q1,q2,q3,q4] 转成你原先那种 [roll, pitch, yaw, capAngle] 风格
+        # 并且构造成跟 "rotation=..., yaw=..." 打印一致。
+        # -----------------------------------------
+        # 1) interpret q1=roll, q2=pitch, q3=yaw
+        roll, pitch, yaw, cap_angle = q_sol
+
+        # 2) 做成 torch 的 (1,3) 和 (1,1)
+        screwdriver_ori_euler_np = np.array([roll, pitch, yaw])
+
+        screwdriver_angle_np = np.array([cap_angle])
+
+        screwdriver_ori_euler = torch.tensor(screwdriver_ori_euler_np, device=self.device,
+                                             dtype=torch.float).reshape(1, 3)
+        screwdriver_angle = torch.tensor(screwdriver_angle_np, device=self.device, dtype=torch.float).reshape(1, 1)
+
+        # 3) 最终拼成 shape=(1,4)，比如 [roll, pitch, yaw, capAngle]
+        new_pose = torch.cat([screwdriver_ori_euler, screwdriver_angle], dim=-1)  # (1,4)
+        print('-------------- observation pose -------------------')
+        print(f'observation screwdriver pose: rotation={screwdriver_ori_euler_np}, yaw={screwdriver_angle_np}')
+
+        return new_pose
+
+    def update_pose_pcd(self):
+
+        base_points_path = "./pointclouds"
+        # base_pics_path = "./pics"
+        # pics_path = self.get_new_folder(base_pics_path)
+        # points_path = self.get_new_folder(base_points_path)
+
+        depth_tensor, mask_tensor = self.get_depth_image()
+
+        if depth_tensor is not None:
+            # print('successfully get the depth image')
+            points = self.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
+            pcd = self.save_point_clouds(points, base_points_path)
+
+            # segmentation
+            from segmentation_pc import process_one_pcd
+            screwdriver_pcd_np = process_one_pcd(pcd)
+            point_cloud = screwdriver_pcd_np
+
+            # registration
+            from PointsRegistration import points_registration
+            import open3d as o3d
+            reg = points_registration()
+            # point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
+
+            sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
+            pc = np.asarray(sample_points.points)
+
+            T_icp = reg.get_pose_estimation(point_cloud, pc)
+            print(T_icp)
+
+            for i in range(point_cloud.shape[0]):
+                point_cloud[i, :] = point_cloud[i, :] @ T_icp[:3, :3].T + T_icp[:3, 3]
+            min_vals = np.min(point_cloud, axis=0)  # 每列取最小值
+            max_vals = np.max(point_cloud, axis=0)  # 每列取最大值
+
+            # 计算尺寸
+            size_x = max_vals[0] - min_vals[0]
+            size_y = max_vals[1] - min_vals[1]
+            size_z = max_vals[2] - min_vals[2]
+
+            min_vals_urdf = np.min(pc, axis=0)
+            max_vals_urdf = np.max(pc, axis=0)
+
+            size_x_urdf = max_vals_urdf[0] - min_vals_urdf[0]
+            size_y_urdf = max_vals_urdf[1] - min_vals_urdf[1]
+            size_z_urdf = max_vals_urdf[2] - min_vals_urdf[2]
+
+            print(f"URDF Model bounding box:")
+            print(f"  X: {min_vals_urdf[0]:.3f} → {max_vals_urdf[0]:.3f}, Size = {size_x_urdf:.3f} m")
+            print(f"  Y: {min_vals_urdf[1]:.3f} → {max_vals_urdf[1]:.3f}, Size = {size_y_urdf:.3f} m")
+            print(f"  Z: {min_vals_urdf[2]:.3f} → {max_vals_urdf[2]:.3f}, Size = {size_z_urdf:.3f} m")
+
+            # 计算和真实点云的尺度比值
+            scale_x = size_x / size_x_urdf
+            scale_y = size_y / size_y_urdf
+            scale_z = size_z / size_z_urdf
+
+            print(f"Scale factor (point cloud vs URDF):")
+            print(f"  X Scale = {scale_x:.3f}")
+            print(f"  Y Scale = {scale_y:.3f}")
+            print(f"  Z Scale = {scale_z:.3f}")
+
+            new_pose = self.set_screwdriver_pose(T_icp, env_idx=0)
+            new_pose = new_pose.unsqueeze(0)
+
+            print('--------------using observation point cloud as input--------------------')
+
+        return new_pose
 
 
 class AllegroValveTurningEnv(AllegroEnv):
@@ -1048,6 +1213,7 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
         self.asset_options.replace_cylinder_with_capsule = False
         screwdriver_asset = self.gym.load_asset(self.sim, self.asset_root, screwdriver_urdf, self.asset_options)
         screwdriver_shape_props = self.gym.get_asset_rigid_shape_properties(screwdriver_asset)
+
         for i in range(len(screwdriver_shape_props)):
             screwdriver_shape_props[i].friction = friction_coefficient
         self.assets.append(
@@ -1099,123 +1265,33 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
             print(f"Collision type: {shape.collision_type}")
         '''
 
-    def set_screwdriver_pose(self, T_ICP, env_idx=0):
-        """
-        根据外部观测(ICP)的 4x4 变换矩阵 T_ICP，更新螺丝刀在 environment 中的位姿。
-        """
-
-        import numpy as np
-        from scipy.spatial.transform import Rotation as R
-
-        # 1) 提取平移和旋转矩阵
-        trans = T_ICP[:3, 3]  # (3,)
-        rot_mat = T_ICP[:3, :3]  # (3,3)
-        rot_mat_np = np.array(rot_mat, copy=True)
-
-        rot_scipy = R.from_matrix(rot_mat_np)
-
-        # 用 SVD 将 3x3 矩阵 R[:2,:2] 投影到 2D 旋转，得到只绕 Z 的最优旋转 Rz。
-        A = rot_mat[:2, :2]
-        U, _, Vt = np.linalg.svd(A)
-        A_rot = U @ Vt
-        Rz = np.eye(3)
-        Rz[:2, :2] = A_rot
-        yaw = np.arctan2(Rz[1, 0], Rz[0, 0])
-        yaw_tensor = torch.tensor([[yaw]], dtype=torch.float32, device=self.device)
-
-        # 2) 把旋转矩阵转成欧拉角 (xyz)
-        euler_xyz = rot_scipy.as_euler('xyz')  # (3,) 依次XYZ
-
-        # 3) 姿态(3 euler + 1 angle)，angel是yaw
-        # 先设 euler 三个值
-        euler_torch = torch.tensor(euler_xyz, device=self.device).float()
-
-        # 螺丝刀 euler 是在 q[:, -4:-1], angle 是 q[:, -1].
-        # 先更新 euler:
-        self._q[env_idx, -4] = euler_torch[0]  # x
-        self._q[env_idx, -3] = euler_torch[1]  # y
-        self._q[env_idx, -2] = euler_torch[2]  # z
-        self._q[env_idx, -1:] = yaw_tensor  # angle
-        self._q = self._q.contiguous()
-
-        # 设置 actor root state
-        dof_pos_target = gymtorch.unwrap_tensor(self._q)
-        actor_handle = self.handles['screwdriver'][env_idx]
-        self.gym.set_dof_position_target_tensor(self.sim, dof_pos_target)
-        print(f"✅✅✅✅ updated screwdriver pose: rotation={euler_xyz}, yaw={yaw}")
-        print('--------------we have successfully set the pose of the screwdriver---------------')
-
-    def get_state(self, orb_flag = False):
+    def get_state(self):
         results = super(AllegroScrewdriverTurningEnv, self).get_state()
 
-        if orb_flag: # 选择使用观测点云作为输入
+        screwdriver_ori_euler = self._q[:, -4:-1]
+        screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
+        screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
 
-            # 定义点云和图象保存路径
-            base_points_path = "./pointclouds"
-            base_pics_path = "./pics"
-            pics_path = self.get_new_folder(base_pics_path)
-            points_path = self.get_new_folder(base_points_path)
+        # results['screwdriver_ori_euler'] = screwdriver_ori_euler
+        # results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
+        # results['screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
+        # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+        # results['screwdriver_angle'] = self._q[:, -1:]
+        # gt_quat = R.from_euler('XYZ', screwdriver_ori_euler).as_quat()
+        # temp_euler = torch.stack((screwdriver_ori_euler[:, 2], screwdriver_ori_euler[:, 1], screwdriver_ori_euler[:, 0]), dim=1).double()
+        # change the order of the euler angle since the pytorch3d only supports fixed axis euler angle
+        # temp1 = torch3d_tf.matrix_to_quaternion(torch3d_tf.euler_angles_to_matrix(screwdriver_ori_euler, 'XYZ'))
+        # temp1 = torch.cat((temp1[..., 1:], temp1[...,:1]), dim=-1)
+        # print(self.rb_states[-3, 3:7] - temp1)
 
-            # 创建姿态和位置的列表用于后面比对
-            ori_list = []
-            pos_list = []
+        results['screwdriver_ori_euler'] = screwdriver_ori_euler
+        results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
+        results[
+            'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
+        # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+        results['screwdriver_angle'] = self._q[:, -1:]
+        print(f'screwdriver pose: rotation={screwdriver_ori_euler.cpu().numpy()}, yaw={self._q[:, -1:].cpu().numpy()}')
 
-            depth_tensor, mask_tensor = self.get_depth_image(pics_path)
-
-            if depth_tensor is not None:
-                # print('successfully get the depth image')
-                points = self.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
-                pcd = self.save_point_clouds(points, points_path)
-
-                # segmentation
-                from segmentation_pc import process_one_pcd
-                screwdriver_pcd_np = process_one_pcd(pcd)
-
-                # registration
-                from PointsRegistration import points_registration
-                import open3d as o3d
-                reg = points_registration()
-                point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
-                sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
-                pc = np.asarray(sample_points.points)
-                T_icp = reg.get_pose_estimation(point_cloud, pc)
-
-                self.set_screwdriver_pose(T_icp, env_idx=0)
-
-                screwdriver_ori_euler = self._q[:, -4:-1]
-                screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
-                screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
-                results['screwdriver_ori_euler'] = screwdriver_ori_euler
-                results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
-                results[
-                    'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-                # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
-                results['screwdriver_angle'] = self._q[:, -1:]
-
-
-        else:
-            screwdriver_ori_euler = self._q[:, -4:-1]
-            screwdriver_ori_axis_angle = R.from_euler('xyz', screwdriver_ori_euler.cpu().numpy()).as_rotvec()
-            screwdriver_ori_axis_angle = torch.tensor(screwdriver_ori_axis_angle).to(device=self.device).float()
-
-            # results['screwdriver_ori_euler'] = screwdriver_ori_euler
-            # results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
-            # results['screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-            # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
-            # results['screwdriver_angle'] = self._q[:, -1:]
-            # gt_quat = R.from_euler('XYZ', screwdriver_ori_euler).as_quat()
-            # temp_euler = torch.stack((screwdriver_ori_euler[:, 2], screwdriver_ori_euler[:, 1], screwdriver_ori_euler[:, 0]), dim=1).double()
-            # change the order of the euler angle since the pytorch3d only supports fixed axis euler angle
-            # temp1 = torch3d_tf.matrix_to_quaternion(torch3d_tf.euler_angles_to_matrix(screwdriver_ori_euler, 'XYZ'))
-            # temp1 = torch.cat((temp1[..., 1:], temp1[...,:1]), dim=-1)
-            # print(self.rb_states[-3, 3:7] - temp1)
-
-            results['screwdriver_ori_euler'] = screwdriver_ori_euler
-            results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
-            results[
-                'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-            # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
-            results['screwdriver_angle'] = self._q[:, -1:]
         q = []
         if self.arm_type != 'None':
             q.append(results['arm_q'])

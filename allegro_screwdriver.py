@@ -148,6 +148,7 @@ class AllegroScrewdriver(AllegroManipulationProblem):
 def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noise=None, noise_noise=None, sim=None, seed=None):
     "only turn the valve once"
     num_fingers = len(params['fingers'])
+    print('\n 在do_trial最开始，获取初始状态')
     state = env.get_state()
     action_list = []
     if params['visualize']:
@@ -259,6 +260,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             obj_gravity=params.get('obj_gravity', False),
             min_force_dict=min_force_dict
         )
+        # planner here
         pregrasp_planner = PositionControlConstrainedSVGDMPC(pregrasp_problem, params)
         index_regrasp_planner = PositionControlConstrainedSVGDMPC(index_regrasp_problem, params)
         thumb_and_middle_regrasp_planner = PositionControlConstrainedSVGDMPC(thumb_and_middle_regrasp_problem, params)
@@ -429,8 +431,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         print('Loaded trajectory sampler')
 
 
-    state = env.get_state()
-    start = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
+    # state = env.get_state()
+    # print('222222222222')
+    # start = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
     if params['exclude_index']:
         turn_problem_fingers = copy.copy(params['fingers'])
         turn_problem_fingers.remove('index')
@@ -511,6 +514,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
     def execute_traj(planner, mode, goal=None, fname=None, initial_samples=None):
         # reset planner
+        print('在execute_traj之前，获取初始状态')
         state = env.get_state()
         state = state['q'].reshape(-1)[:15].to(device=params['device'])
 
@@ -559,7 +563,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             initial_u = initial_samples[:, :-1, -planner.problem.du:]
             initial_samples = torch.cat((initial_x, initial_u), dim=-1)
 
-
+        print('\n 这里我们再次得到状态，是为了对状态做不同的处理')
         state = env.get_state()
         state = state['q'].reshape(-1).to(device=params['device'])
         state = state[:planner.problem.dx]
@@ -582,41 +586,18 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         plans = None
         resample = params.get('diffusion_resample', False) # false
 
-        # save the point cloud and depth image of the screwdriver
-        base_points_path= "./pointclouds"
-        base_pics_path = "./pics"
-        pics_path = env.get_new_folder(base_pics_path)
-        points_path = env.get_new_folder(base_points_path)
-
+        # 创建姿态和位置的列表用于后面比对
         ori_list = []
         pos_list = []
+
         for k in range(planner.problem.T):  # range(params['num_steps']):
             print("----------------------------------------------------------------")
             print(f"Step {k+1}")
 
-            ### here we try to get depth image ###
-            depth_tensor, mask_tensor = env.get_depth_image(pics_path)
-            # print("Depth tensor shape:", depth_tensor)
-            if depth_tensor is not None:
-                # print('successfully get the depth image')
-                points = env.depth_image_to_point_cloud_GPU(0, depth_tensor, mask_tensor, device='cuda:0')
-                pcd = env.save_point_clouds(points, points_path)
-
-                # segmentation
-                from segmentation_pc import process_one_pcd
-                screwdriver_pcd_np = process_one_pcd(pcd)
-
-                # registration
-                from PointsRegistration import points_registration
-                reg = points_registration()
-                point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
-                sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
-                pc = np.asarray(sample_points.points)
-                T_icp = reg.get_pose_estimation(point_cloud, pc)
-
-                env.set_screwdriver_pose(T_icp, env_idx=0)    # save the registration result
-            # print('successfully get the point cloud of the screwdriver')
+            print('\n 这里是开始执行之前的状态')
             state = env.get_state()
+            new_pose = env.update_pose_pcd()
+            state['q'][:,-4:] = new_pose
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             state = state[:planner.problem.dx]
 
@@ -654,10 +635,13 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
             s = time.time()
             best_traj, plans = planner.step(state)
-            print(f'Solve time for step {k+1}', time.time() - s)
+            print(f'Solve time for step {k + 1}', time.time() - s)
             planned_trajectories.append(plans)
             optimizer_paths.append(copy.deepcopy(planner.path))
             N, T, _ = plans.shape
+
+            # here we use this trajectory as a warm start for the next step
+            previous_trajectory = best_traj.clone().detach()
 
             if planner.problem.data is not None:
                 contact_distance[T] = torch.stack((planner.problem.data['index']['sdf'].reshape(N, T + 1),
@@ -671,7 +655,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                 dim=2).detach().cpu()
 
             # execute the action
-            env.set_screwdriver_pose(T_icp, env_idx=0)
+            print('\n 这里是执行之后的状态')
             state = env.get_state()
             state = state['q'].reshape(-1).to(device=params['device'])
             ori = state[:15][-3:]
@@ -717,16 +701,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 action = action.to(device=env.device) + state.unsqueeze(0)[:, :4 * num_fingers].to(device=env.device)
 
             if params['mode'] == 'hardware':
-                set_state = env.get_state()['q'].to(device=env.device)
-                # print(set_state.shape)
-                sim_viz_env.set_pose(set_state)
-                # sim_viz_env.step(action)
-                # for _ in range(3):
-                #     sim_viz_env.step(action)
-                state = sim_viz_env.get_state()['q'].reshape(-1).to(device=params['device'])
-                print(state[:15][-3:])
-            elif params['mode'] == 'hardware_copy':
-                ros_copy_node.apply_action(partial_to_full_state(action[0], params['fingers']))
+                pass
 
             if params['visualize'] and best_traj.shape[0] > 1 and False:
                 add_trajectories(plans.to(device=env.device), best_traj.to(device=env.device),
@@ -734,23 +709,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                  config=params, state2ee_pos_func=state2ee_pos,
                                  show_force=(planner == turn_planner and params['optimize_force']))
             if params['visualize_plan']:
-                traj_for_viz = best_traj[:, :planner.problem.dx]
-                if params['exclude_index']:
-                    traj_for_viz = torch.cat((state[4:4 + planner.problem.dx].unsqueeze(0), traj_for_viz), dim=0)
-                else:
-                    traj_for_viz = torch.cat((state[:planner.problem.dx].unsqueeze(0), traj_for_viz), dim=0)
-                tmp = torch.zeros((traj_for_viz.shape[0], 1),
-                                  device=best_traj.device)  # add the joint for the screwdriver cap
-                traj_for_viz = torch.cat((traj_for_viz, tmp), dim=1)
-                # traj_for_viz[:, 4 * num_fingers: 4 * num_fingers + obj_dof] = axis_angle_to_euler(traj_for_viz[:, 4 * num_fingers: 4 * num_fingers + obj_dof])
-
-                viz_fpath = pathlib.PurePath.joinpath(fpath, f"{fname}/timestep_{k}")
-                img_fpath = pathlib.PurePath.joinpath(viz_fpath, 'img')
-                gif_fpath = pathlib.PurePath.joinpath(viz_fpath, 'gif')
-                pathlib.Path.mkdir(img_fpath, parents=True, exist_ok=True)
-                pathlib.Path.mkdir(gif_fpath, parents=True, exist_ok=True)
-                visualize_trajectory(traj_for_viz, turn_problem.contact_scenes, viz_fpath,
-                                     turn_problem.fingers, turn_problem.obj_dof + 1)
+                pass
 
             env.step(action.to(device=env.device))
 
@@ -782,6 +741,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         # actual_trajectory.append(env.get_state()['q'].reshape(9).to(device=params['device']))
         actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
         # can't stack plans as each is of a different length
+        points_path = "./pointclouds"
         env.save_to_csv(ori_list, pos_list, points_path)
 
         # for memory reasons we clear the data
@@ -794,8 +754,10 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         data[t] = {'plans': [], 'starts': [], 'inits': [], 'init_sim_rollouts': [], 'optimizer_paths': [], 'contact_points': [], 'contact_distance': [], 'contact_state': []}
 
         # sample initial trajectory with diffusion model to get contact sequence
-    state = env.get_state()
-    state = state['q'].reshape(-1).to(device=params['device'])
+    # 这里的代码没用到
+    # state = env.get_state()
+    # print('8888')
+    # state = state['q'].reshape(-1).to(device=params['device'])
 
     # generate initial samples with diffusion model
     initial_samples = None
@@ -944,6 +906,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
     stages_since_plan = 0
     for stage in range(num_stages):
 
+        print('\n在每个阶段开始之前，先获取现在的状态')
         state = env.get_state()
         state = state['q'].reshape(-1)[:15].to(device=params['device'])
         ori = state[:15][-3:]
@@ -1008,22 +971,13 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             continue
         if stage == 0:
             contact = 'pregrasp'
+            print('$$ stage == 0 $$')
             start = env.get_state()['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             best_traj, _ = pregrasp_planner.step(start[:pregrasp_planner.problem.dx])
             for x in best_traj[:, :4 * num_fingers]:
                 action = x.reshape(-1, 4 * num_fingers).to(device=env.device) # move the rest fingers
+                print('更新状态，env.step(action)')
                 env.step(action)
-                if params['mode'] == 'hardware':
-                    set_state = env.get_state()['q'].to(device=env.device)
-                    # print(set_state.shape)
-                    sim_viz_env.set_pose(set_state)  
-                    # for i in range(3):
-                    #     sim_viz_env.step(action)
-                    state = sim_viz_env.get_state()['q'].reshape(-1).to(device=params['device'])
-                    print(state[:15][-3:])
-            if params['mode'] == 'hardware':
-                input("Pregrasp complete. Ready to execute. Press <ENTER> to continue.")
-            continue
         elif sample_contact and (stage == 1 or (params['replan'] and (stages_since_plan == 0 or len(contact_sequence) == 1))):
             # if yaw <= params['goal']:
             #     # params['goal'] -= .5
@@ -1073,6 +1027,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         else:
             contact = contact_sequence[stage-1]
         executed_contacts.append(contact)
+        print('输出stage阶段和contact方式')
         print(stage, contact)
         if contact == 'index':
             _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
@@ -1122,6 +1077,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         pathlib.Path.mkdir(fpath, parents=True, exist_ok=True)
         pickle.dump(data_save, open(f"{fpath}/traj_data.p", "wb"))
         del data_save
+        print('actual_trajectory_save')
         state = env.get_state()
         state = state['q'].reshape(4 * num_fingers + obj_dof + 1).to(device=params['device'])
         actual_trajectory_save = deepcopy(actual_trajectory)
@@ -1159,51 +1115,7 @@ if __name__ == "__main__":
     ros_copy_node = None
 
     if config['mode'] == 'hardware':
-        from hardware.hardware_env import HardwareEnv
-        default_dof_pos = torch.cat((torch.tensor([[0.1, 0.6, 0.6, 0.6]]).float(),
-                                    torch.tensor([[-0.1, 0.5, 0.9, 0.9]]).float(),
-                                    torch.tensor([[0., 0.5, 0.65, 0.65]]).float(),
-                                    torch.tensor([[1.2, 0.3, 0.3, 1.2]]).float()),
-                                    dim=1)
-        env = HardwareEnv(default_dof_pos[:, :16], 
-                          finger_list=config['fingers'], 
-                          kp=config['kp'], 
-                          obj='screwdriver',
-                          mode='relative',
-                          gradual_control=True,
-                          num_repeat=10)
-        env.get_state()
-        for _ in range(5):
-            root_coor, root_ori = env.obj_reader.get_state()
-        print('Root coor:', root_coor)
-        print('Root ori:', root_ori)
-        root_coor = root_coor / 1000 # convert to meters
-        # robot_p = np.array([-0.025, -0.1, 1.33])
-        robot_p = np.array([0, -0.095, 1.33])
-        root_coor = root_coor + robot_p
-        sim_env = RosAllegroScrewdriverTurningEnv(1, control_mode='joint_impedance',
-                                 use_cartesian_controller=False,
-                                 viewer=True,
-                                 steps_per_action=60,
-                                 friction_coefficient=2.5,
-                                 device=config['sim_device'],
-                                 valve=config['object_type'],
-                                 video_save_path=img_save_dir,
-                                 joint_stiffness=config['kp'],
-                                 fingers=config['fingers'],
-                                 table_pose=root_coor,
-                                 gravity=False
-                                 )
-        
-        sim, gym, viewer = sim_env.get_sim()
-        assert (np.array(sim_env.robot_p) == robot_p).all()
-        assert (sim_env.default_dof_pos[:, :16] == default_dof_pos.to(config['sim_device'])).all()
-
-
-        env.world_trans = sim_env.world_trans
-        env.joint_stiffness = sim_env.joint_stiffness
-        env.device = sim_env.device
-        env.table_pose = sim_env.table_pose
+        pass
     else:
         if not config['visualize']:
             img_save_dir = None
@@ -1225,7 +1137,8 @@ if __name__ == "__main__":
 
         sim, gym, viewer = env.get_sim()
 
-    state = env.get_state()
+    # state = env.get_state()
+    # print('1212121212')
     results = {}
 
     # set up the kinematic chain
