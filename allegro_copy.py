@@ -398,7 +398,7 @@ class AllegroEnv:
             self.dof_states[:, 16:16 + 2, 0] = default_dof_pos[:, 16:16 + 2] + 0.05 * torch.randn_like(
                 self.default_dof_pos[:, :16:16 + 2])
             self.dof_states[:, 18, 0] = default_dof_pos[:, 18] + np.pi * 2 * (
-                        torch.rand_like(self.default_dof_pos[:, 18]) - 0.5)
+                    torch.rand_like(self.default_dof_pos[:, 18]) - 0.5)
 
         robot_ids = global_indices[:, self.handles['allegro'][0]].contiguous()
         # obj_ids = global_indices[:, self.handles['valve'][0]].contiguous()
@@ -841,6 +841,39 @@ class AllegroEnv:
 
         return points_screwdriver
 
+    def visualize_point_cloud_as_spheres(self, env, points, prefix="cloud_sphere"):
+        """
+        在 Isaac Gym 中，把 points (N,3) 中的每个点都可视化为一个 sphere actor。
+        - gym: gymapi.Gym 实例
+        - sim: 仿真对象
+        - env_handle: 指定要放在哪个 environment
+        - sphere_asset: 小球的 asset
+        - points: (N,3) 的点云
+        - prefix: 给 actor 命名时的前缀
+        """
+        radius = 0.02
+        asset_options = gymapi.AssetOptions()
+        asset_options.disable_gravity = True
+        sphere_asset = self.gym.create_sphere(self.sim, radius, asset_options)
+
+        max_num = 500
+        N = points.shape[0]
+        if N <= max_num:
+            return points
+        idx = np.random.choice(N, max_num, replace=False)
+        sample_points = points[idx]
+        group_id = 0
+        for i, pt in enumerate(sample_points):
+            x, y, z = pt
+            # 每个小球 actor 的初始变换
+            pose = gymapi.Transform()
+            pose.p = gymapi.Vec3(x, y, z)
+
+            actor_name = f"{prefix}_{i}"
+            self.gym.create_actor(env, sphere_asset, pose, actor_name, group_id, 1)
+            self.gym.step_graphics(self.sim)
+            self.gym.draw_viewer(self.viewer, self.sim, True)
+
     def save_point_clouds(self, points, save_dir):
         import open3d as o3d
         import os
@@ -1055,6 +1088,7 @@ class AllegroEnv:
             new_pose = new_pose.unsqueeze(0)
 
             print('--------------using observation point cloud as input--------------------')
+            self.visualize_point_cloud_as_spheres(self, self.envs[0], point_cloud)
 
         return new_pose
 
