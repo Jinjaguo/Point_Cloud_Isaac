@@ -871,8 +871,9 @@ class AllegroEnv:
 
             actor_name = f"{prefix}_{i}"
             self.gym.create_actor(env, sphere_asset, pose, actor_name, group_id, 1)
-            self.gym.step_graphics(self.sim)
-            self.gym.draw_viewer(self.viewer, self.sim, True)
+        self.gym.simulate(self.sim)
+        self.gym.fetch_results(self.sim, True)
+
 
     def save_point_clouds(self, points, save_dir):
         import open3d as o3d
@@ -925,14 +926,13 @@ class AllegroEnv:
         import torch
 
         # 1) 关节上下限 (根据 URDF limit)
-        if q_guess is None:
-            q_guess = np.zeros(4)
+        q_guess = np.array([0.00160723,  0.01335732, -0.07890692])  # 初始值
 
         # 2) 关节上下限 (根据 URDF limit)
         bounds = [(-1.57, 1.57),  # q1 -> joint_1, axis x
                   (-1.57, 1.57),  # q2 -> joint_2, axis y
-                  (-3.14, 3.14),  # q3 -> joint_3, axis z
-                  (-3.14, 3.14)]  # q4 -> body_cap_joint, axis z
+                  (-3.14, 3.14)]  # q3 -> joint_3, axis z
+
 
         # === 需要先定义自己的 FK 和 cost_func ===#
         def fk_screwdriver(q):
@@ -961,8 +961,7 @@ class AllegroEnv:
                              [0, 1, 0, 0],
                              [0, 0, 1, 0.1],
                              [0, 0, 0, 1]], dtype=np.float32)
-
-            # body_cap_joint: 先平移(0,0,0.1)，再绕z(q[3])
+            '''
             T_bc = np.array([[1, 0, 0, 0],
                              [0, 1, 0, 0],
                              [0, 0, 1, 0.1],
@@ -971,9 +970,11 @@ class AllegroEnv:
                             [sin(q[3]), cos(q[3]), 0, 0],
                             [0, 0, 1, 0],
                             [0, 0, 0, 1]], dtype=np.float32)
-            T_bc = T_bc @ Rz4
+            # T_bc = T_bc @ Rz4
+            '''
+            # body_cap_joint: 先平移(0,0,0.1)，再绕z(q[3])
 
-            T_base_cap = Rx @ Ry @ Rz @ T_sb @ T_bc
+            T_base_cap = Rx @ Ry @ Rz
             return T_base_cap
 
         def pose_error(q, T_target):
@@ -992,32 +993,30 @@ class AllegroEnv:
 
         def cost_func(q):
             err = pose_error(q, T_icp)
-            return (err ** 2).sum()
+            error1 = (err**2).sum()
+            error2 = 50 * (q[:3]**2).sum()
+            return error1 + error2
 
         # === 数值优化 ===#
         res = opt.minimize(cost_func, q_guess, method='SLSQP', bounds=bounds)
-        q_sol = res.x  # 得到 [q1, q2, q3, q4]
+        q_sol = res.x  # 得到 [q1, q2, q3]
 
-        # -----------------------------------------
-        # 下面把 [q1,q2,q3,q4] 转成你原先那种 [roll, pitch, yaw, capAngle] 风格
-        # 并且构造成跟 "rotation=..., yaw=..." 打印一致。
-        # -----------------------------------------
         # 1) interpret q1=roll, q2=pitch, q3=yaw
-        roll, pitch, yaw, cap_angle = q_sol
+        roll, pitch, yaw = q_sol
 
         # 2) 做成 torch 的 (1,3) 和 (1,1)
         screwdriver_ori_euler_np = np.array([roll, pitch, yaw])
-
-        screwdriver_angle_np = np.array([cap_angle])
-
+        # screwdriver_angle_np = np.array([cap_angle])
         screwdriver_ori_euler = torch.tensor(screwdriver_ori_euler_np, device=self.device,
                                              dtype=torch.float).reshape(1, 3)
-        screwdriver_angle = torch.tensor(screwdriver_angle_np, device=self.device, dtype=torch.float).reshape(1, 1)
+        # screwdriver_angle = torch.tensor(screwdriver_angle_np, device=self.device, dtype=torch.float).reshape(1, 1)
 
         # 3) 最终拼成 shape=(1,4)，比如 [roll, pitch, yaw, capAngle]
-        new_pose = torch.cat([screwdriver_ori_euler, screwdriver_angle], dim=-1)  # (1,4)
+        # new_pose = torch.cat([screwdriver_ori_euler, screwdriver_angle], dim=-1)  # (1,4)
+        new_pose = torch.cat([screwdriver_ori_euler, torch.tensor(0.0, device=self.device, dtype=torch.float).reshape(1, 1)], dim=-1)
         print('-------------- observation pose -------------------')
-        print(f'observation screwdriver pose: rotation={screwdriver_ori_euler_np}, yaw={screwdriver_angle_np}')
+        # print(f'observation screwdriver pose: rotation={screwdriver_ori_euler_np}, yaw={screwdriver_angle_np}')
+        print(f'observation screwdriver pose: rotation={screwdriver_ori_euler_np}')
 
         return new_pose
 
@@ -1039,6 +1038,7 @@ class AllegroEnv:
             from segmentation_pc import process_one_pcd
             screwdriver_pcd_np = process_one_pcd(pcd)
             point_cloud = screwdriver_pcd_np
+            # self.visualize_point_cloud_as_spheres(self.envs[0], point_cloud)
 
             # registration
             from PointsRegistration import points_registration
@@ -1051,44 +1051,18 @@ class AllegroEnv:
 
             T_icp = reg.get_pose_estimation(point_cloud, pc)
             print(T_icp)
+            T_delta = np.array([[-0.42886196, 0.45271458, 0.78174608, -0.07897746],
+                                [-0.6925765, -0.72038279, 0.0372347, -0.50707994],
+                                [0.58001311, -0.52545042, 0.62248424, -0.13334877],
+                                [0, 0, 0, 1]])
+            T_icp = T_icp @ T_delta
 
-            for i in range(point_cloud.shape[0]):
-                point_cloud[i, :] = point_cloud[i, :] @ T_icp[:3, :3].T + T_icp[:3, 3]
-            min_vals = np.min(point_cloud, axis=0)  # 每列取最小值
-            max_vals = np.max(point_cloud, axis=0)  # 每列取最大值
-
-            # 计算尺寸
-            size_x = max_vals[0] - min_vals[0]
-            size_y = max_vals[1] - min_vals[1]
-            size_z = max_vals[2] - min_vals[2]
-
-            min_vals_urdf = np.min(pc, axis=0)
-            max_vals_urdf = np.max(pc, axis=0)
-
-            size_x_urdf = max_vals_urdf[0] - min_vals_urdf[0]
-            size_y_urdf = max_vals_urdf[1] - min_vals_urdf[1]
-            size_z_urdf = max_vals_urdf[2] - min_vals_urdf[2]
-
-            print(f"URDF Model bounding box:")
-            print(f"  X: {min_vals_urdf[0]:.3f} → {max_vals_urdf[0]:.3f}, Size = {size_x_urdf:.3f} m")
-            print(f"  Y: {min_vals_urdf[1]:.3f} → {max_vals_urdf[1]:.3f}, Size = {size_y_urdf:.3f} m")
-            print(f"  Z: {min_vals_urdf[2]:.3f} → {max_vals_urdf[2]:.3f}, Size = {size_z_urdf:.3f} m")
-
-            # 计算和真实点云的尺度比值
-            scale_x = size_x / size_x_urdf
-            scale_y = size_y / size_y_urdf
-            scale_z = size_z / size_z_urdf
-
-            print(f"Scale factor (point cloud vs URDF):")
-            print(f"  X Scale = {scale_x:.3f}")
-            print(f"  Y Scale = {scale_y:.3f}")
-            print(f"  Z Scale = {scale_z:.3f}")
-
+            print(T_icp)
             new_pose = self.set_screwdriver_pose(T_icp, env_idx=0)
             new_pose = new_pose.unsqueeze(0)
 
             print('--------------using observation point cloud as input--------------------')
-            self.visualize_point_cloud_as_spheres(self, self.envs[0], point_cloud)
+
 
         return new_pose
 
@@ -1324,7 +1298,6 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
             'screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
         # results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
         results['screwdriver_angle'] = self._q[:, -1:]
-        print(f'screwdriver pose: rotation={screwdriver_ori_euler.cpu().numpy()}, yaw={self._q[:, -1:].cpu().numpy()}')
 
         q = []
         if self.arm_type != 'None':

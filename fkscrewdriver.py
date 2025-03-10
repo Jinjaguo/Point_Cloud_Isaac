@@ -1,4 +1,4 @@
-def fk_screwdriver(q1, q2, q3, cap_angle):
+def fk_screwdriver(q1, q2, q3):
     """
     输入4个角度(弧度)：joint_1=x, joint_2=y, joint_3=z, cap_joint=z(带offset)
     返回一个4x4变换矩阵：base/table系 -> 螺丝刀指定link(比如cap link)
@@ -37,7 +37,7 @@ def fk_screwdriver(q1, q2, q3, cap_angle):
         [0, 0, 1, 0.1],  # offset in Z=0.1
         [0, 0, 0, 1]
     ])
-
+    '''
     # 4. cap_joint: 先平移(0,0,0.1)，再绕z(cap_angle)
     T_bc = np.array([
         [1, 0, 0, 0],
@@ -52,31 +52,30 @@ def fk_screwdriver(q1, q2, q3, cap_angle):
         [ 0,               0,              0, 1]
     ])
     T_bc = T_bc @ Rz4
+    '''
 
     # base->cap = R_x(q1)*R_y(q2)*R_z(q3)*T_sb*T_bc
-    T_base_cap = Rx @ Ry @ Rz @ T_sb @ T_bc
+    T_base_cap = Rx @ Ry @ Rz
     return T_base_cap
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
-q1 = 1.01278074
-q2 = -0.67826671
-q3 = 0.55064581
-cap = 0.56202943
-T_fk = fk_screwdriver(q1, q2, q3, cap)
+q1 = 0.00015042
+q2 = 0.00043013
+q3 = -0.00360273
+T_fk = fk_screwdriver(q1, q2, q3)
 
 
-q1_gym = 0.00160723
-q2_gym = 0.01335732
-q3_gym = -0.07890692
-cap_gym = 1.2259915
-T_fk_gym = fk_screwdriver(q1, q2, q3, cap)
+q1_gym = 0.0090
+q2_gym = 0.0040
+q3_gym = -0.1880
+T_fk_gym = fk_screwdriver(q1_gym, q2_gym, q3_gym)
 
-T_icp = np.array([[-0.38133537, -0.74663514,  0.54508651, -0.33603399],
-                  [ 0.48384859, -0.66362882, -0.57051497, -0.3743772 ],
-                  [ 0.78770164,  0.0461818 ,  0.61432351,  0.16754782],
+T_icp = np.array([[9.82924930e-01,  1.82793637e-01,  2.10965162e-02,  7.58128333e-04],
+                  [-1.82626510e-01,  9.83135391e-01, -9.61041699e-03, -1.06445113e-03],
+                  [-2.24974693e-02,  5.59354129e-03,  9.99731245e-01,  5.66213402e-04],
                   [ 0.        ,  0.        ,  0.        ,  1.        ]])
 
 

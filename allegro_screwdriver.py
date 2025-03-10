@@ -594,10 +594,12 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             print("----------------------------------------------------------------")
             print(f"Step {k+1}")
 
-            print('\n 这里是开始执行之前的状态')
             state = env.get_state()
+            print('Pose before step:')
+            print(state['q'][:, -4:])
             new_pose = env.update_pose_pcd()
             state['q'][:,-4:] = new_pose
+
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             state = state[:planner.problem.dx]
 
@@ -654,18 +656,10 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                 planner.problem.data['thumb']['closest_pt_world'].reshape(N, T + 1, 3)),
                                                 dim=2).detach().cpu()
 
-            # execute the action
-            print('\n 这里是执行之后的状态')
             state = env.get_state()
             state = state['q'].reshape(-1).to(device=params['device'])
             ori = state[:15][-3:]
             print('Current ori:', ori)
-            pos = env.get_pose_of_screwdriver()
-
-            pos = pos.detach().cpu().numpy()
-            ori = ori.detach().cpu().numpy()
-            ori_list.append(ori)
-            pos_list.append(pos)
 
             # record the actual trajectory
             if mode == 'turn':
@@ -712,6 +706,10 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 pass
 
             env.step(action.to(device=env.device))
+            state = env.get_state()
+            state = state['q'].reshape(-1).to(device=params['device'])
+            ori = state[:15][-3:]
+            print('ori after step:', ori)
 
             # turn_problem._preprocess(best_traj.unsqueeze(0))
             # equality_constr_dict = turn_problem._con_eq(best_traj.unsqueeze(0), compute_grads=False, compute_hess=False,
@@ -754,10 +752,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         data[t] = {'plans': [], 'starts': [], 'inits': [], 'init_sim_rollouts': [], 'optimizer_paths': [], 'contact_points': [], 'contact_distance': [], 'contact_state': []}
 
         # sample initial trajectory with diffusion model to get contact sequence
-    # 这里的代码没用到
-    # state = env.get_state()
-    # print('8888')
-    # state = state['q'].reshape(-1).to(device=params['device'])
+    state = env.get_state()
+    state = state['q'].reshape(-1).to(device=params['device'])
 
     # generate initial samples with diffusion model
     initial_samples = None
