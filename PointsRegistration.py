@@ -74,8 +74,8 @@ class points_registration():
 
         bbox1 = o3d_source.get_axis_aligned_bounding_box()
         bbox2 = o3d_target.get_axis_aligned_bounding_box()
-        print("Point Cloud Bounding Box:", bbox1)
-        print("URDF Sample Bounding Box:", bbox2)
+        # print("Point Cloud Bounding Box:", bbox1)
+        # print("URDF Sample Bounding Box:", bbox2)
 
         # 2) 下采样 (voxel_down_sample)
         voxel_size = 0.005  # 体素大小，可根据实际情况调整

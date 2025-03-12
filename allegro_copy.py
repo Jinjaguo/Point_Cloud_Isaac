@@ -888,7 +888,7 @@ class AllegroEnv:
         filename = f"pointcloud_{timestamp}.ply"
         save_path = os.path.join(save_dir, filename)
         o3d.io.write_point_cloud(save_path, pcd)
-        print(f"Saved point cloud to: {save_path}")
+        # print(f"Saved point cloud to: {save_path}")
 
         return pcd
 
@@ -925,8 +925,8 @@ class AllegroEnv:
         import torch
 
         rot_matrix = T_icp[:3, :3]
-        r = R.from_matrix(rot_matrix)
-        # r = r.copy()
+        rot_matrix_copy = np.copy(rot_matrix)
+        r = R.from_matrix(rot_matrix_copy)
         euler_angles = r.as_euler('xyz', degrees=False)
         '''
         # 1) 关节上下限 (根据 URDF limit)
@@ -1057,14 +1057,15 @@ class AllegroEnv:
             pc = np.asarray(sample_points.points)
 
             T_icp = reg.get_pose_estimation(point_cloud, pc)
-            # print(T_icp)
-            T_delta = np.array([[-0.42886196, 0.45271458, 0.78174608, -0.07897746],
-                                [-0.6925765, -0.72038279, 0.0372347, -0.50707994],
-                                [0.58001311, -0.52545042, 0.62248424, -0.13334877],
-                                [0, 0, 0, 1]])
+
+            T_delta = np.array(
+                [[-0.42959849999999999426, 0.45388388000000001732, 0.78336249000000002241, 0.95050291999999991788],
+                 [-0.69028433500000008216, -0.72216643499999999545, 0.04426025499999999835, -0.44512141999999998987],
+                 [0.58580586999999995079, -0.52198107500000001657, 0.61994334500000003452, 0.66040783499999999862],
+                 [0, 0, 0, 1]])
             T_icp = T_icp @ T_delta
 
-            print(T_icp)
+            # print(T_icp)
             new_pose = self.set_screwdriver_pose(T_icp, env_idx=0)
             new_pose = new_pose.unsqueeze(0)
 

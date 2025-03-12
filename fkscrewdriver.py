@@ -1,109 +1,107 @@
-def fk_screwdriver(q1, q2, q3):
+import numpy as np
+
+
+def rotation_matrix_from_euler_xyz(euler_angles):
     """
-    输入4个角度(弧度)：joint_1=x, joint_2=y, joint_3=z, cap_joint=z(带offset)
-    返回一个4x4变换矩阵：base/table系 -> 螺丝刀指定link(比如cap link)
+    将欧拉角转换为旋转矩阵，旋转顺序为 x-y-z.
+    参数:
+      euler_angles: 包含 [alpha, beta, gamma]（单位为弧度）的列表或数组，
+                    分别表示绕 x, y, z 轴的旋转角度.
+    返回:
+      对应的 3x3 旋转矩阵.
     """
-    import numpy as np
-    from math import sin, cos
+    alpha, beta, gamma = euler_angles
 
-    # 1. R_x(q1)
-    Rx = np.array([
-        [1,         0,          0,      0],
-        [0,  cos(q1),  -sin(q1),  0],
-        [0,  sin(q1),   cos(q1),  0],
-        [0,        0,          0,      1]
-    ])
+    # 绕 x 轴的旋转矩阵
+    Rx = np.array([[1, 0, 0],
+                   [0, np.cos(alpha), -np.sin(alpha)],
+                   [0, np.sin(alpha), np.cos(alpha)]])
 
-    # 2. R_y(q2)
-    Ry = np.array([
-        [ cos(q2), 0, sin(q2), 0],
-        [ 0,       1, 0,       0],
-        [-sin(q2), 0, cos(q2), 0],
-        [ 0,       0, 0,       1]
-    ])
+    # 绕 y 轴的旋转矩阵
+    Ry = np.array([[np.cos(beta), 0, np.sin(beta)],
+                   [0, 1, 0],
+                   [-np.sin(beta), 0, np.cos(beta)]])
 
-    # 3. R_z(q3)
-    Rz = np.array([
-        [ cos(q3), -sin(q3), 0, 0],
-        [ sin(q3),  cos(q3), 0, 0],
-        [ 0,        0,       1, 0],
-        [ 0,        0,       0, 1]
-    ])
+    # 绕 z 轴的旋转矩阵
+    Rz = np.array([[np.cos(gamma), -np.sin(gamma), 0],
+                   [np.sin(gamma), np.cos(gamma), 0],
+                   [0, 0, 1]])
 
-    # stick -> body (fixed joint)
-    T_sb = np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0.1],  # offset in Z=0.1
-        [0, 0, 0, 1]
-    ])
-    '''
-    # 4. cap_joint: 先平移(0,0,0.1)，再绕z(cap_angle)
-    T_bc = np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0.1],
-        [0, 0, 0, 1]
-    ])
-    Rz4 = np.array([
-        [ cos(cap_angle), -sin(cap_angle), 0, 0],
-        [ sin(cap_angle),  cos(cap_angle), 0, 0],
-        [ 0,               0,              1, 0],
-        [ 0,               0,              0, 1]
-    ])
-    T_bc = T_bc @ Rz4
-    '''
+    # 按照顺序先绕 x 轴，再绕 y 轴，最后绕 z 轴
+    R = Rx @ Ry @ Rz
+    return R
 
-    # base->cap = R_x(q1)*R_y(q2)*R_z(q3)*T_sb*T_bc
-    T_base_cap = Rx @ Ry @ Rz
-    return T_base_cap
+
+# 定义两个欧拉角（单位：弧度）
+euler = [0.0021, 0.0133, -0.0790]
+
+# 计算对应的旋转矩阵
+R = rotation_matrix_from_euler_xyz(euler)
+T_gym = np.zeros((4, 4))
+T_gym[:3, :3] = R
+T_gym[:3, 3] = [1.3395e-03, -1.5743e-04,  1.3050e+00]
+T_gym[3, 3] = 1
+print(T_gym)
+
+T_icp = np.array([[-0.38719548, -0.73902718,  0.55128802, -0.33183914],
+                  [0.47972286, -0.67209856, -0.56404742, -0.37811116],
+                  [0.78736626,  0.04606885,  0.61476177,  0.16819135],
+                  [0,          0,          0,          1.        ]])
+
+T = np.linalg.inv(T_icp) @ T_gym
+
+# 输出结果
+print("旋转矩阵 R1:")
+print(T_gym)
+print("\n旋转矩阵 R2:")
+print(T_icp)
+print("\n相对变换矩阵 T:")
+print(T)
+
+# 验证结果
+print(np.linalg.norm(T_icp @  T - T_gym))
+
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+# 定义两个变换矩阵
+T_gym = np.array([[-0.44076724,  0.45375013,  0.7800964,   0.94625626],
+                  [-0.68998848, -0.72274815,  0.0393831, -0.44557337],
+                  [ 0.58168332, -0.5212926,   0.62441857,  0.66100806],
+                  [ 0.,          0.,          0.,          1.        ]])
 
-q1 = 0.00015042
-q2 = 0.00043013
-q3 = -0.00360273
-T_fk = fk_screwdriver(q1, q2, q3)
+T_icp = np.array([[-0.41842976,  0.45401763,  0.78662858,  0.95474958],
+                  [-0.69058019, -0.72158472,  0.04913741, -0.44466947],
+                  [ 0.58992842, -0.52266955,  0.61546812,  0.65980761],
+                  [ 0.,          0.,          0.,          1.        ]])
+
+np.set_printoptions(precision=20, suppress=False, floatmode='maxprec_equal')
+T = np.mean([T_gym, T_icp], axis=0)
+print(np.array2string(T, precision=15, suppress_small=False))
+for row in T:
+    print(["{:.20f}".format(val) for val in row])
 
 
-q1_gym = 0.0090
-q2_gym = 0.0040
-q3_gym = -0.1880
-T_fk_gym = fk_screwdriver(q1_gym, q2_gym, q3_gym)
+# 提取旋转部分和平移部分
+R_gym = T_gym[:3, :3]
+t_gym = T_gym[:3, 3]
 
-T_icp = np.array([[9.82924930e-01,  1.82793637e-01,  2.10965162e-02,  7.58128333e-04],
-                  [-1.82626510e-01,  9.83135391e-01, -9.61041699e-03, -1.06445113e-03],
-                  [-2.24974693e-02,  5.59354129e-03,  9.99731245e-01,  5.66213402e-04],
-                  [ 0.        ,  0.        ,  0.        ,  1.        ]])
+R_icp = T_icp[:3, :3]
+t_icp = T_icp[:3, 3]
 
+# 计算平移差异
+translation_difference = np.linalg.norm(t_icp - t_gym)
 
-T_delta = np.linalg.inv(T_icp) @ T_fk_gym
-print(T_delta)
+# 计算旋转差异
+# 使用 scipy.spatial.transform.Rotation 来计算旋转差异
+rotation_gym = R.from_matrix(R_gym)
+rotation_icp = R.from_matrix(R_icp)
 
-# 1. 比较平移误差
-pos_fk  = T_fk[:3, 3]
-pos_icp = T_icp[:3, 3]
-pos_gym = T_fk_gym[:3, 3]
-trans_error = np.linalg.norm(pos_fk - pos_icp)
-trans_error_gym = np.linalg.norm(pos_icp - pos_gym)
-trans_err_12 = np.linalg.norm(pos_fk - pos_gym)
-print("Translation error:", trans_error, " meters")
-print("Translation error (gym):", trans_error_gym, " meters")
-print("Translation error (1-2):", trans_err_12, " meters")
+# 计算两个旋转之间的差异角（单位为弧度）
+rotation_difference = rotation_gym.inv() * rotation_icp
+angle_difference = rotation_difference.magnitude()
 
-# 2. 比较旋转误差
-R_fk = R.from_matrix(T_fk[:3,:3])
-R_icp= R.from_matrix(T_icp[:3,:3])
-R_gym= R.from_matrix(T_fk_gym[:3,:3])
-# 用旋转向量差
-rotvec_fk = R_fk.as_rotvec()
-rotvec_icp= R_icp.as_rotvec()
-rotvec_gym= R_gym.as_rotvec()
-rot_err = np.linalg.norm(rotvec_fk - rotvec_icp)
-rot_err_gym = np.linalg.norm(rotvec_icp - rotvec_gym)
-rot_err_12 = np.linalg.norm(rotvec_fk - rotvec_gym)
-print("Rotation error:", rot_err, " rad (=", np.degrees(rot_err), "deg)")
-print("Rotation error (gym):", rot_err_gym, " rad (=", np.degrees(rot_err_gym), "deg)")
-print("Rotation error (1-2):", rot_err_12, " rad (=", np.degrees(rot_err_12), "deg)")
+# 输出结果
+print("平移差异: ", translation_difference)
+print("旋转差异（弧度）: ", angle_difference)

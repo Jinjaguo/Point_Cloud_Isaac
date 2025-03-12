@@ -596,7 +596,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
             state = env.get_state()
             print('Pose before step:')
-            print(state['q'][:, -4:-1])
+            print(state['q'][:, -4:-1].detach().cpu().numpy())
+            # env.get_pose_of_screwdriver()
             new_pose = env.update_pose_pcd()
             state['q'][:, -4:-1] = new_pose
 
