@@ -596,9 +596,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
             state = env.get_state()
             print('Pose before step:')
-            print(state['q'][:, -4:])
+            print(state['q'][:, -4:-1])
             new_pose = env.update_pose_pcd()
-            state['q'][:,-4:] = new_pose
+            state['q'][:, -4:-1] = new_pose
 
             state = state['q'].reshape(4 * num_fingers + 4).to(device=params['device'])
             state = state[:planner.problem.dx]
@@ -740,7 +740,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
         # can't stack plans as each is of a different length
         points_path = "./pointclouds"
-        env.save_to_csv(ori_list, pos_list, points_path)
+        # env.save_to_csv(ori_list, pos_list, points_path)
 
         # for memory reasons we clear the data
         if params['controller'] != 'diffusion_policy':

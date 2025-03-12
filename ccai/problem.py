@@ -97,7 +97,8 @@ class ConstrainedSVGDProblem(Problem):
             return g, grad_g, hess_g
 
         if include_slack:
-            if self.squared_slack:
+            #if self.squared_slack:
+            if include_slack and self.dz > 0:
                 h_aug = h + 0.5 * z.reshape(-1, self.dz * (self.T + T_offset)) ** 2
             else:
                 h_aug = h + self.slack_weight * z.reshape(-1, self.dz * (self.T + T_offset))
