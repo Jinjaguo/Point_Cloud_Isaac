@@ -394,34 +394,22 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 # print('q_tensor:', q_tensor.shape)
 
                 from only_sdf_planner import contact_constraints
-                g_list = []
-                for finger_name in ['index','middle','thumb']:
-                    # print('computing contact constraint for',finger_name)
-                    g_f, grad_g_f, _ = contact_constraints(q_tensor,finger_name,contact_scenes,compute_grads=True,terminal=False)
-                    g_list.append(g_f)
-
-                g_all = torch.cat(g_list, dim=1)
                 lr = 1e-2  #
-                num_grad_steps = 50
+                num_grad_steps = 70
 
                 # using 100 iterations of gradient descent to satisfy the contact constraint
                 print('Solving contact constraint...')
                 s = time.time()
-                for _ in range(num_grad_steps):
-                    cost = 0.5 * (g_all ** 2).sum()
-                    cost.backward()
-
-                    with torch.no_grad():
-                        q_tensor -= lr * q_tensor.grad
-                        q_tensor.grad.zero_()
-
+                g_list = [1, 1, 1]
+                while g_list[0] > 1e-3 or g_list[1] > 1e-3 or g_list[2] > 1e-3:
                     # recompute the contact g, grad_g
-                    g_list = []
                     for finger_name in ['index', 'middle', 'thumb']:
                         g_f, grad_g_f, _ = contact_constraints(q_tensor, finger_name, contact_scenes, compute_grads=True,
                                                                terminal=False)
-                        g_list.append(g_f)
-                        g_all = torch.cat(g_list, dim=1)
+                        # update q_tensor by gradient descent(make grad_g_f = 0)
+
+                    # if satisfied, break the loop and print tge sdf values
+
 
                 new_state = env.get_state()
                 new_state['q'][:, :16] = q_tensor.detach()
@@ -450,11 +438,12 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         sample_contact = params.get('sample_contact', False)
         num_stages = 2 + 3 * (params['num_turns'] - 1)
         if not sample_contact:
+            # we only focus on the index, thumb_middle, and turn contacts which means turn mode
             contact_sequence = ['turn']
-            for k in range(params['num_turns'] - 1):
-                contact_options = ['index', 'thumb_middle']
-                perm = np.random.permutation(2)
-                contact_sequence += [contact_options[perm[0]], contact_options[perm[1]], 'turn']
+            # for k in range(params['num_turns'] - 1):
+            #     contact_options = ['index', 'thumb_middle']
+            #     perm = np.random.permutation(2)
+            #     contact_sequence += [contact_options[perm[0]], contact_options[perm[1]], 'turn']
         else:
             contact_sequence = None
 
@@ -602,7 +591,6 @@ if __name__ == "__main__":
                 params['device'])  # TODO: confirm if this is the correct location
             params['object_location'] = object_location
             # If params['device'] is cuda:1 but the computer only has 1 gpu, change to cuda:0
-            time.sleep(1)
             final_distance_to_goal = do_trial(env, params, fpath, sim_env, ros_copy_node, inits_noise[i], noise_noise[i], seed=i)
 
     gym.destroy_viewer(viewer)
