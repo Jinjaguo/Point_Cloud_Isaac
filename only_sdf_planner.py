@@ -43,13 +43,15 @@ def contact_constraints(q, finger_name, contact_scenes, compute_grads=True, comp
     finger_idx = FINGER_TO_IDX[finger_name]
     sdf_2d = ret_scene['sdf'][:, finger_idx] # shape [N*T]
     sdf_3d = sdf_2d.reshape(N, T) #[N, T]
+    g = sdf_3d
 
-    T_offset = 0 if projected_diffusion else 1
-    # Retrieve pre-processed data
-    if T_offset < T:
-        g = sdf_3d[:, T_offset:]  # shape [N, T - T_offset]
-    else:
-        g = sdf_3d
+    # we don't use T offset here, since we just use one time step
+    # T_offset = 0 if projected_diffusion else 1
+    # # Retrieve pre-processed data
+    # if T_offset < T:
+    #     g = sdf_3d[:, T_offset:]  # shape [N, T - T_offset]
+    # else:
+    #     g = sdf_3d
 
     # If terminal, only consider last state
     if terminal and g.shape[1] > 0:

@@ -761,9 +761,9 @@ class AllegroEnv:
         self.gym.render_all_camera_sensors(self.sim)
 
         # import datetime
-        # timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
-        # filename = f"color_pic_{timestamp}.png"
-        # self.gym.write_camera_image_to_file(self.sim, self.envs[env_index], camera_handle, gymapi.IMAGE_COLOR, f"{save_dir}/{filename}")
+        # timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S") filename = f"color_pic_{timestamp}.png"
+        # self.gym.write_camera_image_to_file(self.sim, self.envs[env_index], camera_handle, gymapi.IMAGE_COLOR,
+        # f"{save_dir}/{filename}")
 
         # get depth image
         camera_tensor = self.gym.get_camera_image_gpu_tensor(

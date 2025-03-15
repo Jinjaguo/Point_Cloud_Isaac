@@ -1,11 +1,11 @@
 from isaac_victor_envs.utils import get_assets_dir
 from isaac_victor_envs.tasks.allegro import AllegroScrewdriverTurningEnv
-#from isaac_victor_envs.tasks.allegro_ros import RosAllegroScrewdriverTurningEnv
+# from isaac_victor_envs.tasks.allegro_ros import RosAllegroScrewdriverTurningEnv
 
 import sys
+
 sys.path.append('..')
 from model import LatentDiffusionModel
-
 
 import matplotlib.pyplot as plt
 from ccai.utils.allegro_utils import *
@@ -49,9 +49,6 @@ import matplotlib.pyplot as plt
 from ccai.utils.allegro_utils import *
 import pytorch_kinematics.transforms as tf
 
-
-
-
 CCAI_PATH = pathlib.Path(__file__).resolve().parents[0]
 
 print("CCAI_PATH", CCAI_PATH)
@@ -82,7 +79,8 @@ def euler_to_angular_velocity(current_euler, next_euler):
     return omega
 
 
-def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noise=None, noise_noise=None, sim=None, seed=None):
+def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noise=None, noise_noise=None, sim=None,
+             seed=None):
     """only turn the valve once"""
     num_fingers = len(params['fingers'])
     print('\n get initial state before resetting environment')
@@ -203,7 +201,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             for param in vae.parameters():
                 param.requires_grad = False
 
-        trajectory_sampler = TrajectorySampler(T=params['T'] + 1, dx=(15 + 1) if not model_t else params['nzt'], du=21 if not model_t else 0, type=params['type'],
+        trajectory_sampler = TrajectorySampler(T=params['T'] + 1, dx=(15 + 1) if not model_t else params['nzt'],
+                                               du=21 if not model_t else 0, type=params['type'],
                                                timesteps=256, hidden_dim=128 if not model_t else 64,
                                                context_dim=3, generate_context=False,
                                                constrain=params['projected'],
@@ -211,7 +210,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                inits_noise=inits_noise, noise_noise=noise_noise,
                                                guided=params['use_guidance'],
                                                vae=None)
-        trajectory_sampler.load_state_dict(torch.load(f'{model_path}', map_location=torch.device(params['device'])), strict=True)
+        trajectory_sampler.load_state_dict(torch.load(f'{model_path}', map_location=torch.device(params['device'])),
+                                           strict=True)
         trajectory_sampler.to(device=params['device'])
         trajectory_sampler.send_norm_constants_to_submodels()
         print('Loaded trajectory sampler')
@@ -391,39 +391,61 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 state = env.get_state()
                 q_state = state['q'][:16].reshape(-1).to(device=params['device'])
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().requires_grad_(True).to(device=params['device'])
+                optimizer = torch.optim.Adam([q_tensor], lr=1e-3)
                 # print('q_tensor:', q_tensor.shape)
 
                 from only_sdf_planner import contact_constraints
-                lr = 1e-2  #
-                num_grad_steps = 70
-
-                # using 100 iterations of gradient descent to satisfy the contact constraint
+                # using gradient descent to satisfy the contact constraint
                 print('Solving contact constraint...')
                 s = time.time()
-                g_list = [1, 1, 1]
-                while g_list[0] > 1e-3 or g_list[1] > 1e-3 or g_list[2] > 1e-3:
+                # initialize contact scenes make sure it can be used to compute the contact constraint
+                threshold = 1e-3
+                max_steps = 200
+                step = 0
+                # for each finger and avoid the infinite loop
+                while step < max_steps:
+                    step += 1
                     # recompute the contact g, grad_g
-                    for finger_name in ['index', 'middle', 'thumb']:
-                        g_f, grad_g_f, _ = contact_constraints(q_tensor, finger_name, contact_scenes, compute_grads=True,
+                    # reset the gradient of the cost function to zero
+                    optimizer.zero_grad()
+
+                    g_list = []  # record the sdf values for each finger
+                    for finger_name in (finger_list or ['index', 'middle', 'thumb']):
+                        g_f, grad_g_f, _ = contact_constraints(q_tensor,
+                                                               finger_name,
+                                                               contact_scenes,
+                                                               compute_grads=True,
                                                                terminal=False)
                         # update q_tensor by gradient descent(make grad_g_f = 0)
+                        g_val = torch.mean(torch.square(g_f))  # cost function for one finger
+                        g_list.append(g_val.item())  # record the cost function for each finger
+
+                    cost = sum(torch.mean(torch.square(contact_constraints(q_tensor, f, contact_scenes)[0]))
+                               for f in (finger_list or ['index', 'middle', 'thumb']))
+                    cost.backward()
+                    optimizer.step()
 
                     # if satisfied, break the loop and print tge sdf values
-
+                    max_g = max(g_list)  # g_list is a list of g_val for each finger
+                    if max_g < threshold:
+                        # print the sdf values of each finger
+                        print(" index: SDF =", g_list[0])
+                        print(" middle: SDF =", g_list[1])
+                        print(" thumb: SDF =", g_list[2])
+                        print('time for solving contact constraint:', time.time() - s)
+                        break
 
                 new_state = env.get_state()
                 new_state['q'][:, :16] = q_tensor.detach()
                 action = new_state['q'][:, :4 * num_fingers]
                 action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
+                print('force the finger to be in contact with the object')
                 env.step(action)
 
-                print('force the finger to be in contact with the object')
-                print('time for solving contact constraint:', time.time() - s)
                 print("Final SDF values after optimization:")
                 for finger_name in ['index', 'middle', 'thumb']:
                     g_f, _, _ = contact_constraints(q_tensor, finger_name, contact_scenes, compute_grads=False)
                     print(f"{finger_name}: SDF =", g_f.detach().cpu().numpy())
-
 
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
             return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance
@@ -432,8 +454,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             for t in range(1, 1 + params['T']):
                 data[t] = {'plans': [], 'starts': [], 'inits': [], 'init_sim_rollouts': [], 'optimizer_paths': [],
                            'contact_points': [], 'contact_distance': [], 'contact_state': []}
-
-
 
         sample_contact = params.get('sample_contact', False)
         num_stages = 2 + 3 * (params['num_turns'] - 1)
@@ -496,6 +516,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             env.reset()
     return -1
 
+
 if __name__ == "__main__":
     config = yaml.safe_load(pathlib.Path('allegro_screwdriver_csvto_only.yaml').read_text())
 
@@ -539,8 +560,7 @@ if __name__ == "__main__":
 
     world_trans = env.world_trans
     scene_trans = world_trans.inverse().compose(
-        pk.Transform3d(device=device).translate(0, 0, 1.205)) # object_location is ([0, 0, 1.205])
-
+        pk.Transform3d(device=device).translate(0, 0, 1.205))  # object_location is ([0, 0, 1.205])
 
     screwdriver_asset = f'{get_assets_dir()}/screwdriver/screwdriver.urdf'
     chain_object = pk.build_chain_from_urdf(open(screwdriver_asset).read())
@@ -565,7 +585,7 @@ if __name__ == "__main__":
     partial_to_full_state = partial(partial_to_full_state, fingers=config['fingers'])
 
     inits_noise, noise_noise = [None] * config['num_trials'], [None] * config['num_trials']
-    start_ind = 0# if config['experiment_name'] == 'allegro_screwdriver_csvto_diff_sine_cosine_eps_.015_2.5_damping_pi_6' else 0
+    start_ind = 0  # if config['experiment_name'] == 'allegro_screwdriver_csvto_diff_sine_cosine_eps_.015_2.5_damping_pi_6' else 0
     for i in tqdm(range(start_ind, config['num_trials'])):
         if config['mode'] != 'hardware':
             torch.manual_seed(i)
@@ -575,7 +595,8 @@ if __name__ == "__main__":
         for controller in config['controllers'].keys():
             env.reset()
             now = ''
-            fpath = pathlib.Path(f'{CCAI_PATH}/data/experiments/{config["experiment_name"]}.{now}/{controller}/trial_{i + 1}')
+            fpath = pathlib.Path(
+                f'{CCAI_PATH}/data/experiments/{config["experiment_name"]}.{now}/{controller}/trial_{i + 1}')
             if config['mode'] != 'hardware':
                 pathlib.Path.mkdir(fpath, parents=True, exist_ok=True)
             # set up params
@@ -591,17 +612,8 @@ if __name__ == "__main__":
                 params['device'])  # TODO: confirm if this is the correct location
             params['object_location'] = object_location
             # If params['device'] is cuda:1 but the computer only has 1 gpu, change to cuda:0
-            final_distance_to_goal = do_trial(env, params, fpath, sim_env, ros_copy_node, inits_noise[i], noise_noise[i], seed=i)
+            final_distance_to_goal = do_trial(env, params, fpath, sim_env, ros_copy_node, inits_noise[i],
+                                              noise_noise[i], seed=i)
 
     gym.destroy_viewer(viewer)
     gym.destroy_sim(sim)
-
-
-
-
-
-
-
-
-
-
