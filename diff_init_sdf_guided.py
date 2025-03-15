@@ -417,8 +417,15 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                                compute_grads=True,
                                                                terminal=False)
                         # update q_tensor by gradient descent(make grad_g_f = 0)
-                        g_val = torch.mean(torch.square(g_f))  # cost function for one finger
-                        g_list.append(g_val.item())  # record the cost function for each finger
+                        cost_f = 0.5 * (g_f ** 2).sum()  # 1/2 * (g_f - 0)^2
+
+                        gf_flat = g_f.view(-1)  # [1]
+                        gradgf_flat = grad_g_f.view(-1, q_tensor.shape[-1])  # [1, 16]
+
+                        # this is the gradient of the cost function w.r.t. q_tensor
+                        partial_grad = (gf_flat.unsqueeze(-1) * gradgf_flat).sum(dim=0)  # [16]
+
+
 
                     cost = sum(torch.mean(torch.square(contact_constraints(q_tensor, f, contact_scenes)[0]))
                                for f in (finger_list or ['index', 'middle', 'thumb']))
