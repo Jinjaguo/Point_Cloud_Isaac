@@ -390,71 +390,83 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 # 16 = 4*3(finger number) + 4(roll pitch yaw and 1 screwdriver-cap joint)
                 state = env.get_state()
                 q_state = state['q'][:16].reshape(-1).to(device=params['device'])
-                q_tensor = q_state.reshape(1, 1, 16).clone().detach().requires_grad_(True).to(device=params['device'])
+                q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
                 optimizer = torch.optim.Adam([q_tensor], lr=1e-3)
                 # print('q_tensor:', q_tensor.shape)
+
+                # TODO 我应该对每个手指单独计算梯度，对每个手指分别更新，再累加成总梯度，而不是一次性更新所有手指
+                # 这样的话，每个手指的更新都有自己的梯度，而不是所有手指的梯度的平均值
 
                 from only_sdf_planner import contact_constraints
                 # using gradient descent to satisfy the contact constraint
                 print('Solving contact constraint...')
                 s = time.time()
                 # initialize contact scenes make sure it can be used to compute the contact constraint
-                threshold = 1e-3
+                threshold = 1e-3 # 0.001
                 max_steps = 200
                 step = 0
                 # for each finger and avoid the infinite loop
                 while step < max_steps:
                     step += 1
-                    # recompute the contact g, grad_g
-                    # reset the gradient of the cost function to zero
                     optimizer.zero_grad()
+                    cost_total = 0.0
+                    sdf_vals = {}  # record the sdf values for each finger
 
-                    g_list = []  # record the sdf values for each finger
-                    for finger_name in (finger_list or ['index', 'middle', 'thumb']):
+                    # recompute the contact g, grad_g
+                    total_grad = torch.zeros_like(q_tensor)
+
+                    for finger_name in ['index', 'middle', 'thumb']:
                         g_f, grad_g_f, _ = contact_constraints(q_tensor,
                                                                finger_name,
                                                                contact_scenes,
                                                                compute_grads=True,
                                                                terminal=False)
-                        # update q_tensor by gradient descent(make grad_g_f = 0)
-                        cost_f = 0.5 * (g_f ** 2).sum()  # 1/2 * (g_f - 0)^2
 
+                        # update q_tensor by gradient descent(make grad_g_f = 0)
+                        cost_f = 0.5 * (g_f ** 2).sum()  # 1/2 * (g_f - 0)^2 #
+                        cost_total += cost_f  # accumulate the cost of all fingers
+
+                        sdf_mean = g_f.mean().item() # record the sdf(3 fingers) mean
+                        sdf_vals[finger_name] = sdf_mean
+
+                        # we don't use this cost function to compute the gradient, we use grad_g_f directly
                         gf_flat = g_f.view(-1)  # [1]
                         gradgf_flat = grad_g_f.view(-1, q_tensor.shape[-1])  # [1, 16]
 
                         # this is the gradient of the cost function w.r.t. q_tensor
-                        partial_grad = (gf_flat.unsqueeze(-1) * gradgf_flat).sum(dim=0)  # [16]
+                        partial_grad = (gf_flat.unsqueeze(-1) * gradgf_flat).sum(dim=0)   # [16]
+                        partial_grad = partial_grad.view(q_tensor.shape) # turn it back to [1，1, 16]
 
+                        total_grad += partial_grad # accumulate the gradient of all fingers
 
+                    print(f"Step {step}: Total cost = {cost_total.item():.6f}")
+                    for finger in ['index', 'middle', 'thumb']:
+                        print(f"  {finger}: Mean SDF = {sdf_vals[finger]:.6f}")
+                    grad_norm = total_grad.norm().item()
+                    print(f"  Total gradient norm = {grad_norm:.6f}")
 
-                    cost = sum(torch.mean(torch.square(contact_constraints(q_tensor, f, contact_scenes)[0]))
-                               for f in (finger_list or ['index', 'middle', 'thumb']))
-                    cost.backward()
-                    optimizer.step()
+                    q_tensor.grad = total_grad.detach()  # set the gradient of q_tensor to total_grad
+                    optimizer.step()  # Adam uses q_tensor.grad to update q_tensor
+                    # reset the gradient of the cost function to zero
+                    optimizer.zero_grad()
 
-                    # if satisfied, break the loop and print tge sdf values
-                    max_g = max(g_list)  # g_list is a list of g_val for each finger
-                    if max_g < threshold:
-                        # print the sdf values of each finger
-                        print(" index: SDF =", g_list[0])
-                        print(" middle: SDF =", g_list[1])
-                        print(" thumb: SDF =", g_list[2])
+                    if max(sdf_vals.values()) < threshold:
                         print('time for solving contact constraint:', time.time() - s)
-                        break
+                        # print the sdf values of each finger
+                        print("Final SDF values after optimization:")
+                        for finger in ['index', 'middle', 'thumb']:
+                            print(f"  {finger}: Mean SDF = {sdf_vals[finger]:.6f}")
+                        break  # if the contact constraint is satisfied, break the loop
 
                 new_state = env.get_state()
-                new_state['q'][:, :16] = q_tensor.detach()
+                new_state['q'][:, :16] = q_tensor.detach().clone()
                 action = new_state['q'][:, :4 * num_fingers]
                 action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
                 print('force the finger to be in contact with the object')
                 env.step(action)
 
-                print("Final SDF values after optimization:")
-                for finger_name in ['index', 'middle', 'thumb']:
-                    g_f, _, _ = contact_constraints(q_tensor, finger_name, contact_scenes, compute_grads=False)
-                    print(f"{finger_name}: SDF =", g_f.detach().cpu().numpy())
-
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
+
             return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance
 
             data = {}

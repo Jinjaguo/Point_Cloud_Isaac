@@ -64,7 +64,7 @@ def contact_constraints(q, finger_name, contact_scenes, compute_grads=True, comp
 
     grad_2d = ret_scene['grad_sdf'][:, finger_idx, :]  # [N*T, 16]
     grad_3d = grad_2d.reshape(N, T, 16)  # => [N, T, 16]
-    grad_3d = grad_3d[:, T_offset:]  # => [N, T - offset, 16]
+    # grad_3d = grad_3d[:, T_offset:]  # => [N, T - offset, 16] # we don't use T offset here, since we just use one time step
     if terminal and grad_3d.shape[1] > 0:
         grad_3d = grad_3d[:, -1:]  # [N,1,16]
 
