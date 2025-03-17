@@ -336,24 +336,24 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
 
     def _preprocess_fingers(self, q, theta):
         N, _, _ = q.shape
-        print(q.shape, theta.shape)
+        # print(q.shape, theta.shape)
         obj_dof = theta.shape[-1]
 
         # reshape to batch across time
         q_b = q.reshape(-1, 4 * self.num_fingers)
-        print(self.num_fingers)
-        print(self.fingers)
-        print('q_b.shape',q_b.shape)
+        # print(self.num_fingers)
+        # print(self.fingers)
+        # print('q_b.shape',q_b.shape)
         # print(q_b)
         theta_b = theta.reshape(-1, obj_dof)
-        print('theta_b.shape',theta_b.shape)
+        # print('theta_b.shape',theta_b.shape)
         if self.obj_joint_dim > 0:
             theta_obj_joint = torch.zeros((theta_b.shape[0], self.obj_joint_dim),
                                           device=theta_b.device)  # add an additional dimension for the cap of the screw driver
             # the cap does not matter for the task, but needs to be included in the state for the model
             theta_b = torch.cat((theta_b, theta_obj_joint), dim=1)
         full_q = partial_to_full_state(q_b, fingers=self.fingers)
-        print('full_q.shape',full_q.shape)
+        # print('full_q.shape',full_q.shape)
         ret_scene = self.contact_scenes.scene_collision_check(full_q, theta_b,
                                                               compute_gradient=True,
                                                               compute_hessian=False)
@@ -363,6 +363,11 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
             # reshape and throw away data for unused fingers
             grad_g_q = ret_scene.get('grad_sdf', None)
             self.data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, self.T + 1, 16)
+            # TODO: check if this is correct，ask！！！
+            # why the grad_g_q of thumb is related to the joints of object？
+            if finger == 'thumb':
+                print('^^^^^^^^^^^^^^^^^^^^^^^^^^^')
+                print(f"Batch 0, Time step 0, grad_sdf: {self.data[finger]['grad_sdf'][0, 0]}")
 
             # contact jacobian
             contact_jacobian = ret_scene.get('contact_jacobian', None)

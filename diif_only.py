@@ -386,26 +386,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 ori = state[:15][-3:]
                 print('ori after step:', ori)
 
-                # make sure contact constraint is satisfied
-                # 16 = 4*3(finger number) + 4(roll pitch yaw and 1 screwdriver-cap joint)
-                state = env.get_state()
-                q_state = state['q'][:16].reshape(-1).to(device=params['device'])
-                q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
-                # print('q_tensor:', q_tensor.shape)
-
-                from only_sdf_planner import update
-                # using gradient descent to satisfy the contact constraint
-                print('Solving contact constraint...')
-
-                # update the q_tensor with grad_g using contact constrain only
-                q_tensor = update(q_tensor, contact_scenes)
-                new_state = env.get_state()
-                new_state['q'][:, :16] = q_tensor.detach().clone()
-                action = new_state['q'][:, :4 * num_fingers]
-                action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
-                print('force the finger to be in contact with the object')
-                env.step(action)
-
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
 
             return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance
