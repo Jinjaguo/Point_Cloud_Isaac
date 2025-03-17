@@ -318,6 +318,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             contact_points = {}
             contact_distance = {}
             plans = None
+            # use results_n2r to record the sdf of each finger in gym env and yaw after the action
+            results_n2r = []
 
             # size of state is 15
             dx = 15
@@ -406,9 +408,28 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 print('force the finger to be in contact with the object')
                 env.step(action)
 
+                # record the sdf of each fingers in gym env
+                state_n2r = env.get_state()
+                q_state_n2r = state_n2r['q'][:16].reshape(1, 1, 16).to(device=params['device'])
+                yaw_n2r = q_state_n2r[:, :, -2].item()
+                from only_sdf_planner import contact_constraints
+                for finger in fingers:
+                    g, _, _ = contact_constraints(q_state_n2r, finger, contact_scenes, compute_grads=False,
+                                                  compute_hess=False,
+                                                  terminal=False,
+                                                  projected_diffusion=False)
+                    results_n2r.append({
+                        'yaw': yaw_n2r,
+                        'finger': finger,
+                        'sdf': g.cpu().detach().numpy()  # 转换为numpy方便保存
+                    })
+            import pandas as pd
+            df = pd.DataFrame(results_n2r)
+
+
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
 
-            return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance
+            return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance, df
 
             data = {}
             for t in range(1, 1 + params['T']):
@@ -453,22 +474,28 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
             if contact == 'index':
                 _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance = execute_traj(
+                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
                     None, mode='index', goal=_goal, fname=f'index_regrasp_{stage}')
                 traj = torch.cat((traj[..., :-6], torch.zeros(*traj.shape[:-1], 3).to(device=params['device']),
                                   traj[..., -6:]), dim=-1)
+                df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
+                print(f'saving sdf results to csv file')
 
             elif contact == 'thumb_middle':
                 _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance = execute_traj(
+                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
                     None, mode='thumb_middle',
                     goal=_goal, fname=f'thumb_middle_regrasp_{stage}')
                 traj = torch.cat((traj, torch.zeros(*traj.shape[:-1], 6).to(device=params['device'])), dim=-1)
+                df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
+                print(f'saving sdf results to csv file')
 
             elif contact == 'turn':
                 _goal = torch.tensor([0, 0, state[-1] - np.pi / 6]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance = execute_traj(
+                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
                     None, mode='turn', goal=_goal, fname=f'turn_{stage}')
+                df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
+                print(f'saving sdf results to csv file')
 
             if contact != 'pregrasp':
                 actual_trajectory.append(traj)
