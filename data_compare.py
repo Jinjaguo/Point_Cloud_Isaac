@@ -11,7 +11,7 @@ compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_1./cs
 save_dir = './data/experiments/'
 
 # trial 和 stage 的范围
-num_trials = 6
+num_trials = 10
 num_stages = 12
 
 
@@ -94,26 +94,28 @@ compare_trail_yaws, compare_trail_delta_yaws, compare_sdf_data = process_directo
 
 # -- 4.1 对比 Yaw --
 plt.figure(figsize=(8, 5))
-plt.plot(range(1, num_trials + 1), base_trail_yaws, marker='o', label='Base - Yaw')
-plt.plot(range(1, num_trials + 1), compare_trail_yaws, marker='x', label='Compare - Yaw')
+plt.bar(range(1, num_trials + 1), base_trail_yaws, label='Base - Yaw', width=0.4, align='center', alpha=0.7)
+plt.bar(range(1, num_trials + 1), compare_trail_yaws, label='Compare - Yaw', width=0.4, align='edge', alpha=0.7)
 plt.xlabel('Trial')
 plt.ylabel('Mean Yaw')
 plt.title('Mean Yaw Comparison (Base vs Compare)')
 plt.grid(True)
 plt.legend()
+plt.ylim(bottom=0.25)
 plt.savefig(f'{save_dir}/mean_yaw_comparison.png')
 plt.show()
 plt.close()
 
 # -- 4.2 对比 Delta Yaw --
 plt.figure(figsize=(8, 5))
-plt.plot(range(1, num_trials + 1), base_trail_delta_yaws, marker='o', label='Base - Delta Yaw')
-plt.plot(range(1, num_trials + 1), compare_trail_delta_yaws, marker='x', label='Compare - Delta Yaw')
+plt.bar(range(1, num_trials + 1), base_trail_delta_yaws, label='Base - Yaw', width=0.4, align='center', alpha=0.7)
+plt.bar(range(1, num_trials + 1), compare_trail_delta_yaws, label='Compare - Yaw', width=0.4, align='edge', alpha=0.7)
 plt.xlabel('Trial')
 plt.ylabel('Mean Delta Yaw')
 plt.title('Mean Delta Yaw Comparison (Base vs Compare)')
 plt.grid(True)
 plt.legend()
+plt.ylim(bottom=0.03)
 plt.savefig(f'{save_dir}/mean_delta_yaw_comparison.png')
 plt.show()
 plt.close()
