@@ -159,7 +159,7 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
         """
 
         super().__init__(start, goal, T, device)
-        self.dx, self.du = dx, du
+        self.dx, self.du = dx, du  #initial 12 12 final 12 21
         self.dg_per_t = 0
         self.dg_constant = 0
         self.device = device
@@ -336,7 +336,7 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
 
     def _preprocess_fingers(self, q, theta):
         N, _, _ = q.shape
-        print(q.shape, theta.shape)
+        # print(q.shape, theta.shape)
         obj_dof = theta.shape[-1]
 
         # reshape to batch across time
@@ -365,9 +365,9 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
             self.data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, self.T + 1, 16)
             # TODO: check if this is correct，ask！！！
             # why the grad_g_q of thumb is related to the joints of object？
-            if finger == 'thumb':
-                print('^^^^^^^^^^^^^^^^^^^^^^^^^^^')
-                print(f"Batch 0, Time step 0, grad_sdf: {self.data[finger]['grad_sdf'][0, 0]}")
+            # if finger == 'thumb':
+            #     print('^^^^^^^^^^^^^^^^^^^^^^^^^^^')
+            #     print(f"Batch 0, Time step 0, grad_sdf: {self.data[finger]['grad_sdf'][0, 0]}")
 
             # contact jacobian
             contact_jacobian = ret_scene.get('contact_jacobian', None)
@@ -493,11 +493,10 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
         """
         N, T, _ = q.shape
         T_offset = 0 if projected_diffusion else 1
-        d = self.d
+        d = self.d # 32 + obj_dof(15)
         # Retrieve pre-processed data
         ret_scene = self.data[finger_name]
         g = ret_scene.get('sdf').reshape(N, T if projected_diffusion else T + 1, 1)# - 1.0e-3
-        print(g.shape)
         # for some reason the thumb penetrates the object
         # if finger_name == 'thumb':
         #    g = g - 1.0e-3
@@ -524,7 +523,9 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
             grad_g[:, T_range, T_range, :16] = grad_g_q[:, T_offset:]
             grad_g[:, T_range, T_range, 16: 16 + self.obj_dof] = grad_g_theta.reshape(N, T + T_offset, self.obj_dof)[:, T_offset:]
             grad_g = grad_g.reshape(N, -1, T, d)
+            print(grad_g.shape)
             grad_g = grad_g.reshape(N, -1, T * d)
+            print(grad_g.shape)
             if terminal:
                 grad_g = grad_g[:, -1].reshape(N, 1, T * d)
         else:

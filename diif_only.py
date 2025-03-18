@@ -384,20 +384,19 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 env.step(action.to(device=env.device))
                 state = env.get_state()
-                state = state['q'].reshape(-1).to(device=params['device'])
-                ori = state[:15][-3:]
+                state_1 = state['q'].reshape(-1).to(device=params['device'])
+                ori = state_1[:15][-3:]
                 print('ori after step:', ori)
 
                 # record the sdf of each fingers in gym env
-                state_n2r = env.get_state()
-                q_state_n2r = state_n2r['q'][:16].reshape(1,1,16).to(device=params['device'])
-                yaw_n2r = q_state_n2r[:,:,-2].item()
-                from only_sdf_planner import contact_constraints
+                q_state_n2r = state['q'][:16].reshape(1, 1, 16).to(device=params['device'])
+                yaw_n2r = q_state_n2r[:, :, -2].item()
+                from only_sdf_planner import _preprocess_fingers
+                data = _preprocess_fingers(q_state_n2r, contact_scenes)
                 for finger in fingers:
-                    g, _, _ = contact_constraints(q_state_n2r, finger, contact_scenes, compute_grads=False,
-                                                  compute_hess=False,
-                                                  terminal=False,
-                                                  projected_diffusion=False)
+                    g = data[finger]['sdf']
+                    print(f'{finger}_sdf is {g.item()}')
+
                     results_n2r.append({
                         'yaw': yaw_n2r,
                         'finger': finger,
