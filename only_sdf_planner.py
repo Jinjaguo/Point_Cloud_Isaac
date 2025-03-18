@@ -6,6 +6,42 @@ FINGER_TO_IDX = {
     'middle': 1,
     'thumb': 2
 }
+def _preprocess_fingers(q, contact_scenes):
+    """
+    :param q: (1, 1, 16)
+    :param contact_scenes: the object provided by scene_collision_check(...)
+    :return: data: a dictionary containing sdf and grad_sdf for each finger
+    """
+    data = {}
+    fingers = ['index', 'middle', 'thumb']
+    # q: (N, T, 16) = (1, 1, 16)
+    N, T, d = q.shape
+    assert d == 16, f"Expect last dim=16, but got {d}"
+
+    q_b = q.reshape(-1, 4 * len(fingers))
+
+    theta = q[..., 12:16]  # shape [N, T, 3]
+    theta_b = theta.reshape(-1, 3)
+    theta_obj_joint = torch.zeros((theta_b.shape[0], 1),
+                                  device=theta_b.device)
+    # add a dimension for the cap of the screwdriver
+    theta_b = torch.cat((theta_b, theta_obj_joint), dim=1)
+
+    full_q = partial_to_full_state(q_b, fingers=fingers)
+
+    ret_scene = contact_scenes.scene_collision_check(full_q, theta_b,
+                                                     compute_gradient=True,
+                                                     compute_hessian=False)
+
+    for i, finger in enumerate(fingers):
+        data[finger] = {}
+        data[finger]['sdf'] = ret_scene['sdf'][:, i].reshape(N, T)
+        grad_g_q = ret_scene.get('grad_sdf', None)
+        data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, T, d)
+        data[finger]['grad_env_sdf'] = ret_scene['grad_env_sdf'][:, i, :3]
+
+    return data
+
 
 def contact_constraints(q, finger_name, contact_scenes, compute_grads=True, compute_hess=False, terminal=False,
                          projected_diffusion=False):
@@ -23,52 +59,27 @@ def contact_constraints(q, finger_name, contact_scenes, compute_grads=True, comp
         g: shape [N, M], M = T-offset or 1
         grad_g: shape [N, M, T*d], or the shape you want
     """
-    # q: (N, T, 16) = (1, 1, 16)
     N, T, d = q.shape
-    assert d == 16, f"Expect last dim=16, but got {d}"
+    data = _preprocess_fingers(q, contact_scenes)
+    ret_scene = data[finger_name]
+    g = ret_scene.get('sdf').reshape(N, 1, 1)
+    grad_g_q = ret_scene.get('grad_sdf', None)
+    grad_g_theta = ret_scene.get('grad_env_sdf', None)
 
-    q_r = q[..., :12] # shape [N, T, 12]
-    q_b = q_r.reshape(N*T, 4 * 3)
-
-    theta = q[..., 12:]  # shape [N, T, 4]
-    theta_b = theta.reshape(N*T, 4)
-
-    fingers = ['index', 'middle', 'thumb']
-    full_q = partial_to_full_state(q_b, fingers=fingers)
-
-    ret_scene = contact_scenes.scene_collision_check(full_q, theta_b,
-                                                          compute_gradient=True,
-                                                          compute_hessian=False)
-
-    finger_idx = FINGER_TO_IDX[finger_name]
-    sdf_2d = ret_scene['sdf'][:, finger_idx] # shape [N*T]
-    sdf_3d = sdf_2d.reshape(N, T) #[N, T]
-    g = sdf_3d
-
-    # we don't use T offset here, since we just use one time step
-    # T_offset = 0 if projected_diffusion else 1
-    # # Retrieve pre-processed data
-    # if T_offset < T:
-    #     g = sdf_3d[:, T_offset:]  # shape [N, T - T_offset]
-    # else:
-    #     g = sdf_3d
-
-    # If terminal, only consider last state
-    if terminal and g.shape[1] > 0:
-        g = g[:, -1:].reshape(N, 1)
-
-    g = g.reshape(N, -1) #[N, M]
-
-    if not compute_grads:
+    T_offset = 0 if projected_diffusion else 1
+    if compute_grads:
+        T_range = torch.arange(T, device=q.device)
+        # compute gradient of sdf
+        grad_g = torch.zeros(N, T, T, d, device=q.device)
+        grad_g[:, T_range, T_range, :16] = grad_g_q[:, T_offset:]
+        grad_g[:, T_range, T_range, 16: 16 + 3] = grad_g_theta.reshape(N, T + T_offset, 3)[:,
+                                                             T_offset:]
+        grad_g = grad_g.reshape(N, -1, T, d)
+        grad_g = grad_g.reshape(N, -1, T * d)
+        if terminal:
+            grad_g = grad_g[:, -1].reshape(N, 1, T * d)
+    else:
         return g, None, None
-
-    grad_2d = ret_scene['grad_sdf'][:, finger_idx, :]  # [N*T, 16]
-    grad_3d = grad_2d.reshape(N, T, 16)  # => [N, T, 16]
-    # grad_3d = grad_3d[:, T_offset:]  # => [N, T - offset, 16] # we don't use T offset here, since we just use one time step
-    if terminal and grad_3d.shape[1] > 0:
-        grad_3d = grad_3d[:, -1:]  # [N,1,16]
-
-    grad_g = grad_3d
 
     if compute_hess:
         hess = torch.zeros(N, g.shape[1], T * d, T * d, device=q.device)
@@ -134,7 +145,7 @@ def update(q_state, contact_scenes, finger_list=('index','middle','thumb'), max_
         #     print(f"  {finger}: SDF = {sdf_vals[finger]:.6f}")
 
         if max(sdf_vals.values()) < threshold:
-            # print('time for solving contact constraint:', time.time() - s)
+            print('time for solving contact constraint:', time.time() - s)
             # # print the sdf values of each finger
             # print("Final SDF values after optimization:")
             # for finger in ['index', 'middle', 'thumb']:

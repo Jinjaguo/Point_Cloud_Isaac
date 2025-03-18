@@ -401,6 +401,14 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 # update the q_tensor with grad_g using contact constrain only
                 q_tensor = update(q_tensor, contact_scenes)
+                print(q_tensor)
+                from only_sdf_planner import contact_constraints
+                for finger in fingers:
+                    g, _, _ = contact_constraints(q_tensor, finger, contact_scenes, compute_grads=False,
+                                                  compute_hess=False,
+                                                  terminal=False,
+                                                  projected_diffusion=False)
+                    print(f'{finger}_sdf is {g.item()}')
                 new_state = env.get_state()
                 new_state['q'][:, :16] = q_tensor.detach().clone()
                 action = new_state['q'][:, :4 * num_fingers]
@@ -411,6 +419,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 # record the sdf of each fingers in gym env
                 state_n2r = env.get_state()
                 q_state_n2r = state_n2r['q'][:16].reshape(1, 1, 16).to(device=params['device'])
+                print(q_state_n2r)
                 yaw_n2r = q_state_n2r[:, :, -2].item()
                 from only_sdf_planner import contact_constraints
                 for finger in fingers:
@@ -418,6 +427,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                   compute_hess=False,
                                                   terminal=False,
                                                   projected_diffusion=False)
+                    print(f'{finger}_sdf is {g.item()}')
+
                     results_n2r.append({
                         'yaw': yaw_n2r,
                         'finger': finger,

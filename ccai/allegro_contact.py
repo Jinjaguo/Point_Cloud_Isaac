@@ -336,7 +336,7 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
 
     def _preprocess_fingers(self, q, theta):
         N, _, _ = q.shape
-        # print(q.shape, theta.shape)
+        print(q.shape, theta.shape)
         obj_dof = theta.shape[-1]
 
         # reshape to batch across time
@@ -349,7 +349,7 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
         # print('theta_b.shape',theta_b.shape)
         if self.obj_joint_dim > 0:
             theta_obj_joint = torch.zeros((theta_b.shape[0], self.obj_joint_dim),
-                                          device=theta_b.device)  # add an additional dimension for the cap of the screw driver
+                                          device=theta_b.device)  # add a dimension for the cap of the screwdriver
             # the cap does not matter for the task, but needs to be included in the state for the model
             theta_b = torch.cat((theta_b, theta_obj_joint), dim=1)
         full_q = partial_to_full_state(q_b, fingers=self.fingers)
@@ -496,7 +496,8 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
         d = self.d
         # Retrieve pre-processed data
         ret_scene = self.data[finger_name]
-        g = ret_scene.get('sdf').reshape(N, T if projected_diffusion else T + 1, 1)  # - 1.0e-3
+        g = ret_scene.get('sdf').reshape(N, T if projected_diffusion else T + 1, 1)# - 1.0e-3
+        print(g.shape)
         # for some reason the thumb penetrates the object
         # if finger_name == 'thumb':
         #    g = g - 1.0e-3
