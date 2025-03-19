@@ -395,12 +395,17 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
                 # print('q_tensor:', q_tensor.shape)
 
-                from only_sdf_planner import update
+                from only_sdf_planner import update, update_with_dif_lr, _preprocess_fingers
                 # using gradient descent to satisfy the contact constraint
                 print('Solving contact constraint...')
 
                 # update the q_tensor with grad_g using contact constrain only
-                q_tensor = update(q_tensor, contact_scenes)
+                # q_tensor = update(q_tensor, contact_scenes)
+                q_tensor = update_with_dif_lr(q_tensor, contact_scenes)
+                data = _preprocess_fingers(q_tensor, contact_scenes)
+                for finger in fingers:
+                    g = data[finger]['sdf']
+                    print(f'{finger}_sdf is {g.item()}')
                 # new_state = env.get_state()
                 action = q_tensor.detach().clone()[..., :4 * num_fingers]
                 action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
@@ -411,7 +416,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 state_n2r = env.get_state()
                 q_state_n2r = state_n2r['q'][:16].reshape(1, 1, 16).to(device=params['device'])
                 yaw_n2r = q_state_n2r[:, :, -2].item()
-                from only_sdf_planner import _preprocess_fingers
                 data = _preprocess_fingers(q_state_n2r, contact_scenes)
                 for finger in fingers:
                     g = data[finger]['sdf']

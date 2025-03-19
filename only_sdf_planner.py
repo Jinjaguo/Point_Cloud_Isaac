@@ -164,7 +164,7 @@ def update(q_state, contact_scenes, finger_list=('index', 'middle', 'thumb'), ma
 
 
 def update_with_dif_lr(q_state, contact_scenes, finger_list=('index', 'middle', 'thumb'), max_steps=200,
-                       threshold=1e-3):
+                       threshold=1.5e-3):
     """
     :param q_state: shape [1, 1, 16], where the first 12 dimensions are fingers (4 fingers x 3 dof), the last 4
     dimensions are objects (roll, pitch, yaw, etc).
@@ -183,7 +183,8 @@ def update_with_dif_lr(q_state, contact_scenes, finger_list=('index', 'middle', 
     import time
     s = time.time()
 
-    scaling_factors = {'index': 0.8, 'middle': 3.0, 'thumb': 0.5}  # middle 手指梯度放大 2 倍
+    # here we set the learning rate for each finger separately
+    scaling_factors = {'index': 0.01, 'middle': 100.0, 'thumb': 0.01}
     while step < max_steps:
         step += 1
         # first we zero the gradients
@@ -215,10 +216,11 @@ def update_with_dif_lr(q_state, contact_scenes, finger_list=('index', 'middle', 
             partial_grad = (gf_flat.unsqueeze(-1) * gradgf_flat).sum(dim=0)  # [16]
             partial_grad = partial_grad.view(q_tensor.shape)  # shape=[1, 1, 16]
 
-            # 这里放大 middle 手指的梯度
+            # here we set the learning rate for each finger
             partial_grad *= scaling_factors[finger_name]
             total_grad += partial_grad
 
+        torch.nn.utils.clip_grad_norm_([q_tensor], max_norm=1.0)
         q_tensor.grad = total_grad
         # q_tensor has been updated
         optimizer.step()  # Adam updates q_tensor
