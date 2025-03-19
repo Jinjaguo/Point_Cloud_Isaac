@@ -761,9 +761,9 @@ class AllegroEnv:
         self.gym.render_all_camera_sensors(self.sim)
 
         # import datetime
-        # timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S") filename = f"color_pic_{timestamp}.png"
-        # self.gym.write_camera_image_to_file(self.sim, self.envs[env_index], camera_handle, gymapi.IMAGE_COLOR,
-        # f"{save_dir}/{filename}")
+        # timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
+        # filename = f"color_pic_{timestamp}.png"
+        # self.gym.write_camera_image_to_file(self.sim, self.envs[env_index], camera_handle, gymapi.IMAGE_COLOR, f"{save_dir}/{filename}")
 
         # get depth image
         camera_tensor = self.gym.get_camera_image_gpu_tensor(
@@ -885,9 +885,9 @@ class AllegroEnv:
         pcd.points = o3d.utility.Vector3dVector(points_np)
 
         timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
-        filename = f"pointcloud_{timestamp}.ply"
-        save_path = os.path.join(save_dir, filename)
-        o3d.io.write_point_cloud(save_path, pcd)
+        # filename = f"pointcloud_{timestamp}.ply"
+        # save_path = os.path.join(save_dir, filename)
+        # o3d.io.write_point_cloud(save_path, pcd)
         # print(f"Saved point cloud to: {save_path}")
 
         return pcd
