@@ -158,3 +158,15 @@ def update(q_state, contact_scenes, finger_list=('index','middle','thumb'), max_
 
         # return the optimized q_tensor
     return q_tensor
+
+
+def update_with_dif_lr(q_state, contact_scenes, finger_list=('index','middle','thumb'), max_steps=200, threshold=1e-3):
+    """
+    :param q_state: shape [1, 1, 16], where the first 12 dimensions are fingers (4 fingers x 3 dof), the last 4 dimensions are objects (roll, pitch, yaw, etc).
+    :param contact_scenes: the object provided by scene_collision_check(...)
+    :param finger_list: the list of fingers to optimize
+    :param max_steps: maximum number of optimization steps
+    :param threshold: the threshold for early stopping
+    :return: the optimized q_tensor
+    """
+    pass

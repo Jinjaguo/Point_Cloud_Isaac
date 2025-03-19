@@ -119,7 +119,7 @@ plt.figure(figsize=(8, 5))
 plt.bar(range(1, num_trials + 1), base_trail_yaws, label='Base - Yaw', width=0.4, align='center', alpha=0.7)
 plt.bar(range(1, num_trials + 1), compare_trail_yaws, label='Compare - Yaw', width=0.4, align='edge', alpha=0.7)
 plt.xlabel('Trial')
-plt.ylabel('Mean Yaw')
+plt.ylabel('Mean Yaw/(rads)')
 plt.title('Mean Yaw Comparison (Base vs Compare)')
 plt.grid(True)
 plt.legend()
@@ -132,7 +132,7 @@ plt.figure(figsize=(8, 5))
 plt.bar(range(1, num_trials + 1), base_trail_delta_yaws, label='Base - Yaw', width=0.4, align='center', alpha=0.7)
 plt.bar(range(1, num_trials + 1), compare_trail_delta_yaws, label='Compare - Yaw', width=0.4, align='edge', alpha=0.7)
 plt.xlabel('Trial')
-plt.ylabel('Mean Delta Yaw')
+plt.ylabel('Mean Delta Yaw/(rads)')
 plt.title('Mean Delta Yaw Comparison (Base vs Compare)')
 plt.grid(True)
 plt.legend()
@@ -151,6 +151,10 @@ for finger in fingers:
     # 转换数据为 numpy 数组，确保 shape 为 (num_trials, num_steps)
     base_sdf_array = np.array(base_sdf_data[finger])
     compare_sdf_array = np.array(compare_sdf_data[finger])
+
+    # 转换数据单位为mm
+    base_sdf_array *= 100
+    compare_sdf_array *= 100
 
     if base_sdf_array.ndim == 1:
         base_sdf_array = base_sdf_array.reshape(num_trials, num_steps)
@@ -181,7 +185,7 @@ for finger in fingers:
 
     # 图表设置
     plt.xlabel('Step')
-    plt.ylabel('SDF')
+    plt.ylabel('SDF/(mm)')
     plt.title(f'SDF Comparison for {finger.capitalize()} Finger')
     plt.legend()
     plt.grid(True)
