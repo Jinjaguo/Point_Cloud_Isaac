@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 #####################################
 # 1. 定义两个目录：base_dir, compare_dir
 #####################################
-base_dir = './data/experiments/allegro_screwdriver_diff_only_2./csvgd'
+base_dir = './data/experiments/allegro_screwdriver_diff_only_1./csvgd'
 compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_1./csvgd'
 save_dir = './data/experiments/'
 
 # trial 和 stage 的范围
-num_trials = 7
+num_trials = 30
 num_stages = 12
 
 

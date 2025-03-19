@@ -5,7 +5,7 @@ num_steps: 12
 num_turns: 3
 num_trials: 10
 visualize: True
-experiment_name: 'allegro_screwdriver_diff_init_sdf_guided_1'
+experiment_name: 'allegro_screwdriver_diff_init_sdf_guided_3'
 # experiment_name: 'allegro_screwdriver_diff_only_2'
 # experiment_name: 'allegro_screwdriver_diff_init_sdf_guided_2'
 mode: 'simulation'  # choose from 'simulation', 'hardware', 'hardware_copy'
