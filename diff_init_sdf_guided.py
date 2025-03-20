@@ -272,6 +272,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             print('get state ... ...')
             state = env.get_state()
             # we use only first 15 dof(these are all state variables),last one dof is the screwdriver-cap joint
+            new_pose = env.update_pose_pcd()
+            # override the pose of the object with the new pose
+            state['q'][:, -4:-1] = new_pose
             state = state['q'].reshape(-1)[:16].to(device=params['device'])
 
             # generate context from mode
@@ -383,6 +386,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 action = action.to(device=env.device) + state.unsqueeze(0)[:, :4 * num_fingers].to(device=env.device)
 
                 env.step(action.to(device=env.device))
+
                 state = env.get_state()
                 state = state['q'].reshape(-1).to(device=params['device'])
                 ori = state[:15][-3:]
@@ -390,12 +394,15 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 # make sure contact constraint is satisfied
                 # 16 = 4*3(finger number) + 4(roll pitch yaw and 1 screwdriver-cap joint)
+                from only_sdf_planner import update, update_with_dif_lr, _preprocess_fingers
                 state = env.get_state()
                 q_state = state['q'][:16].reshape(-1).to(device=params['device'])
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
                 # print('q_tensor:', q_tensor.shape)
-
-                from only_sdf_planner import update, update_with_dif_lr, _preprocess_fingers
+                data = _preprocess_fingers(q_tensor, contact_scenes)
+                for finger in fingers:
+                    g = data[finger]['sdf']
+                    print(f'{finger}_sdf is {g.item()}')
                 # using gradient descent to satisfy the contact constraint
                 print('Solving contact constraint...')
 
@@ -403,6 +410,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 # q_tensor = update(q_tensor, contact_scenes)
                 q_tensor = update_with_dif_lr(q_tensor, contact_scenes)
                 data = _preprocess_fingers(q_tensor, contact_scenes)
+                print(q_tensor)
                 for finger in fingers:
                     g = data[finger]['sdf']
                     print(f'{finger}_sdf is {g.item()}')

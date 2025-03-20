@@ -42,6 +42,8 @@ def _preprocess_fingers(q, contact_scenes):
         data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, T, d)
         data[finger]['grad_env_sdf'] = ret_scene['grad_env_sdf'][:, i, :3]
 
+    grad_g_theta = ret_scene.get('grad_env_sdf', None)
+    print(grad_g_theta.shape)
     return data
 
 
@@ -184,8 +186,12 @@ def update_with_dif_lr(q_state, contact_scenes, finger_list=('index', 'middle', 
     s = time.time()
 
     # here we set the learning rate for each finger separately
-    scaling_factors = {'index': 0.01, 'middle': 100.0, 'thumb': 0.01}
-    while step < max_steps:
+    scaling_factors = {'index': 20.0, 'middle': 100.0, 'thumb': 40.0}
+
+    # initialize the sdf values to 1.0 so that we can get the loop
+    sdf_vals = {'index': 1.0,'middle': 1.0, 'thumb': 1.0}
+
+    while step < max_steps and max(sdf_vals.values()) > threshold:
         step += 1
         # first we zero the gradients
         optimizer.zero_grad()
@@ -229,14 +235,8 @@ def update_with_dif_lr(q_state, contact_scenes, finger_list=('index', 'middle', 
         for finger in ['index', 'middle', 'thumb']:
             print(f"  {finger}: SDF = {sdf_vals[finger]:.6f}")
 
-        if max(sdf_vals.values()) < threshold:
-            print('time for solving contact constraint:', time.time() - s)
-            # # print the sdf values of each finger
-            # print("Final SDF values after optimization:")
-            # for finger in ['index', 'middle', 'thumb']:
-            #     print(f"  {finger}: SDF = {sdf_vals[finger]:.6f}")
-            break  # if the contact constraint is satisfied, break the loop
 
-        # return the optimized q_tensor
+    print('time for solving contact constraint:', time.time() - s)
+    # return the optimized q_tensor
     return q_tensor
 
