@@ -18,37 +18,27 @@ num_stages = 12
 #####################################
 # 2. 写一个函数，用来读取某个目录下所有 trial/stage 的数据
 #####################################
-def process_directory(directory, num_trials = num_trials, num_stages = num_stages, num_steps=12):
+def process_directory(directory, num_trials=30, num_stages=12, num_steps=12):
     """
     读取给定目录下 trial_1 到 trial_N，每个 trial 有 stage_0.csv 到 stage_{num_stages-1}.csv
-    每个csv包含3个finger的yaw和sdf数据，每行对应一个step，共12个step
+    每个 csv 包含 3 个 finger 的 yaw 和 sdf 数据，每行对应一个 step，共 num_steps 个 step
+
     返回:
-        - trail_yaws: list，长度 = num_trials，每个元素是该 trial 的平均 yaw
-        - trail_delta_yaws: list，长度 = num_trials，每个元素是该 trial 的平均 delta yaw
-        - stepwise_sdf_means: dict, key 为 finger('index','middle','thumb'),
-                    value 为一个 list，长度 = 12 (step数)，
-                    每个元素是 10 个 trial 中该 step 的 SDF 均值
+        - stage_yaws: list，长度 = num_trials * num_stages，每个元素是该 stage 的平均 yaw
+        - stage_delta_yaws: list，长度 = num_trials * num_stages，每个元素是该 stage 的平均 delta yaw
+        - stage_stepwise_sdf_means: dict, key 为 finger ('index','middle','thumb'),
+            value 为一个 list，长度 = num_trials * num_stages，每个元素是一个长度为 num_steps 的 list，
+            表示该 stage 中每个 step 的 SDF 均值
     """
-    trail_yaws = []
-    trail_delta_yaws = []
+    stage_yaws = []         # 存储每个 stage 的 yaw
+    stage_delta_yaws = []   # 存储每个 stage 的 delta yaw
+    stage_stepwise_sdf_means = {'index': [], 'middle': [], 'thumb': []}  # 存储每个 stage 的 12 个 step 的 SDF 值
 
-    # 初始化 stepwise_sdf_means，用于存储 12 个 step 的 SDF 平均值
-    stepwise_sdf_means = {'index': [[] for _ in range(num_steps)],
-                          'middle': [[] for _ in range(num_steps)],
-                          'thumb': [[] for _ in range(num_steps)]}
-
+    # 遍历每个 trial
     for trial_idx in range(1, num_trials + 1):
         trial_dir = os.path.join(directory, f'trial_{trial_idx}')
 
-        # 存储当前 trial 下的各 stage 统计
-        stage_yaws = []
-        stage_delta_yaws = []
-
-        # 先存储每个 step 的 SDF 值，等遍历完 stage 后再求均值
-        stepwise_sdf_trial = {'index': [[] for _ in range(num_steps)],
-                              'middle': [[] for _ in range(num_steps)],
-                              'thumb': [[] for _ in range(num_steps)]}
-
+        # 遍历该 trial 下的每个 stage
         for stage_idx in range(num_stages):
             csv_path = os.path.join(trial_dir, f'yaw_sdf_results_{stage_idx}.csv')
             if not os.path.exists(csv_path):
@@ -56,89 +46,92 @@ def process_directory(directory, num_trials = num_trials, num_stages = num_stage
 
             df = pd.read_csv(csv_path)
 
-            # 计算 yaw 范围
-            yaws = np.abs(df['yaw'].unique())  # shape=(12,)
+            # 计算该 stage 的 yaw 值
+            # 假设每个 stage 有 12 行（12 个 step）的数据，每行 yaw 相同或者可以取 unique 后计算范围
+            yaws = np.abs(df['yaw'].unique())  # 得到该 stage 中所有 step 的 yaw（一般有 12 个值）
+            # 计算 yaw 范围：最大值 - 最小值
             mean_yaw_this_stage = np.max(yaws) - np.min(yaws)
             stage_yaws.append(mean_yaw_this_stage)
 
-            # 计算 delta yaw
-            delta_yaws = np.abs(np.diff(yaws))  # shape=(11,)
+            # 计算 delta yaw：对 yaws 做差分，并取平均（11 个 delta）
+            delta_yaws = np.abs(np.diff(yaws))
             if len(delta_yaws) > 0:
                 mean_delta_this_stage = np.mean(delta_yaws)
             else:
                 mean_delta_this_stage = 0.0
             stage_delta_yaws.append(mean_delta_this_stage)
 
-            # 处理 3 个 finger 的 SDF，按 step 累积
-            for step_idx in range(num_steps):  # 每个 stage 有 num_steps 个 step
-                for finger in ['index', 'middle', 'thumb']:
-                    step_sdf_values = df[(df['finger'] == finger)].iloc[step_idx]['sdf']
-                    step_sdf = float(step_sdf_values.strip('[]'))
-                    stepwise_sdf_trial[finger][step_idx].append(step_sdf)
-
-        # 计算当前 trial 下 12 个 step 的 SDF 平均值，并存入 stepwise_sdf_means
-        for step_idx in range(num_steps):
+            # 对于每个 finger，提取该 stage 中 12 个 step 的 SDF 值
             for finger in ['index', 'middle', 'thumb']:
-                mean_sdf_this_step = np.mean(stepwise_sdf_trial[finger][step_idx])
-                stepwise_sdf_means[finger][step_idx].append(mean_sdf_this_step)
+                # 筛选出当前 finger 的所有行，顺序应对应 12 个 step
+                df_finger = df[df['finger'] == finger]
+                # 如果该 finger 数据不满 12 行，可考虑报错或填充
+                if len(df_finger) < num_steps:
+                    raise ValueError(f"Not enough steps for finger {finger} in {csv_path}")
 
+                # 依次提取每个 step 的 sdf 值，注意这里假设 sdf 字符串形如 "[[0.00123]]"
+                step_sdf_values = []
+                for step_idx in range(num_steps):
+                    val_str = df_finger.iloc[step_idx]['sdf']
+                    # 解析字符串中的数值
+                    step_sdf = float(val_str.strip('[]'))
+                    step_sdf_values.append(step_sdf)
+                # 将当前 stage 的 12 个 step 的 SDF 均值（这里已是每个 step 的值）存入结果字典
+                stage_stepwise_sdf_means[finger].append(step_sdf_values)
 
-        # 计算当前 trial 的 yaw 和 delta yaw 均值
-        trail_yaws.append(np.mean(stage_yaws))
-        trail_delta_yaws.append(np.mean(stage_delta_yaws))
+    print(np.array(stage_yaws).shape, np.array(stage_delta_yaws).shape)
+    return stage_yaws, stage_delta_yaws, stage_stepwise_sdf_means
 
-    # # 计算 10 个 trial 下的最终 stepwise_sdf 均值
-    # 确保最终存储的数据为 (10, 12)
-    final_stepwise_sdf_means = {'index': [[] for _ in range(num_trials)],
-                                'middle': [[] for _ in range(num_trials)],
-                                'thumb': [[] for _ in range(num_trials)]}
-
-    for finger in ['index', 'middle', 'thumb']:
-        for trial_idx in range(num_trials):  # 遍历 10 个 trial
-            trial_sdf_means = []
-            for step_idx in range(num_steps):  # 遍历 12 个 step
-                trial_sdf_means.append(np.mean(stepwise_sdf_means[finger][step_idx][trial_idx]))
-            final_stepwise_sdf_means[finger][trial_idx] = trial_sdf_means  # 存入该 trial
-
-    return trail_yaws, trail_delta_yaws, final_stepwise_sdf_means
 
 
 #####################################
 # 3. 分别读取 base_dir 和 compare_dir
 #####################################
-base_trail_yaws, base_trail_delta_yaws, base_sdf_data = process_directory(base_dir)
-print(np.mean(base_trail_yaws))
-compare_trail_yaws, compare_trail_delta_yaws, compare_sdf_data = process_directory(compare_dir)
-print(np.mean(compare_trail_yaws))
+base_stage_yaws, base_stage_delta_yaws, base_sdf_data = process_directory(base_dir)
+compare_stage_yaws, compare_stage_delta_yaws, compare_sdf_data = process_directory(compare_dir)
 #####################################
 # 4. 可视化对比：Yaw & Delta Yaw
 #####################################
+# 计算每个 stage 的平均 Yaw 和 Delta Yaw
+num_total_stages = num_trials * num_stages
 
-# -- 4.1 对比 Yaw --
+# 绘制 Yaw 比较图（添加连线）
+# 计算差值：compare_stage_yaws - base_stage_yaws
+yaw_difference = np.array(compare_stage_yaws) - np.array(base_stage_yaws)
+indices = np.where(yaw_difference< 0)[0]
+print(indices)
+# 绘制差值柱状图
 plt.figure(figsize=(8, 5))
-plt.bar(range(1, num_trials + 1), base_trail_yaws, label='Base - Yaw', width=0.4, align='center', alpha=0.7)
-plt.bar(range(1, num_trials + 1), compare_trail_yaws, label='Compare - Yaw', width=0.4, align='edge', alpha=0.7)
-plt.xlabel('Trial')
-plt.ylabel('Mean Yaw/(rads)')
-plt.title('Mean Yaw Comparison (Base vs Compare)')
+plt.bar(range(1, num_total_stages + 1), yaw_difference, label='yaw_difference', width=0.5, align='center', alpha=0.7, color='blue')
+# 添加参考线 y=0
+plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
+plt.xlabel('Stage')
+plt.ylabel('Yaw Difference (Compare - Base) (rads)')
+plt.title('Yaw Difference Per Trail (Compare - Base)')
 plt.grid(True)
-plt.legend()
-plt.savefig(f'{save_dir}/mean_yaw_comparison.png')
+plt.savefig(f'{save_dir}/yaw_difference_each_trail.png')
 plt.show()
 plt.close()
 
-# -- 4.2 对比 Delta Yaw --
+
+# 绘制 Delta Yaw 比较图（添加连线）
 plt.figure(figsize=(8, 5))
-plt.bar(range(1, num_trials + 1), base_trail_delta_yaws, label='Base - Yaw', width=0.4, align='center', alpha=0.7)
-plt.bar(range(1, num_trials + 1), compare_trail_delta_yaws, label='Compare - Yaw', width=0.4, align='edge', alpha=0.7)
-plt.xlabel('Trial')
-plt.ylabel('Mean Delta Yaw/(rads)')
-plt.title('Mean Delta Yaw Comparison (Base vs Compare)')
+step_yaw_difference = np.array(compare_stage_delta_yaws) - np.array(base_stage_delta_yaws)
+indices = np.where(step_yaw_difference < 0)[0]
+print(indices)
+plt.bar(range(1, num_total_stages + 1), step_yaw_difference, label='step_yaw_difference', width=0.5, align='center', alpha=0.7, color='blue')
+# 添加参考线 y=0
+plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
+plt.xlabel('Stage')
+plt.ylabel('Yaw Difference (Compare - Base) (rads)')
+plt.title('Yaw Difference Per Step (Compare - Base)')
 plt.grid(True)
 plt.legend()
-plt.savefig(f'{save_dir}/mean_delta_yaw_comparison.png')
+plt.savefig(f'{save_dir}/yaw_difference_each_step.png')
 plt.show()
 plt.close()
+
+
 #####################################
 # 5. 可视化对比：SDF (index, middle, thumb)
 #####################################

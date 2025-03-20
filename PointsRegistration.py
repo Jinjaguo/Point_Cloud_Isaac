@@ -8,6 +8,8 @@ import copy
 from sklearn.neighbors import NearestNeighbors
 from torch.fx.experimental.unification.multipledispatch.dispatcher import source
 
+import data_vis
+
 sys.path.append('..')
 
 
@@ -222,6 +224,7 @@ class points_registration():
         # 7) 可视化
         # self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
 
+
         return result_icp_fine.transformation
 
     def add_noise_to_ply(self, points, noise_std=0.001):
@@ -251,6 +254,7 @@ class points_registration():
         target_temp.paint_uniform_color([0, 0.651, 0.929])
         source_temp.transform(transformation)
         o3d.visualization.draw_geometries([source_temp, target_temp])
+
 
 
 """

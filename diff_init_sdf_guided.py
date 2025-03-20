@@ -338,7 +338,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 print('Pose before step:')
                 print(state['q'][:, -4:-1].detach().cpu().numpy())
                 # using the cloud point to update the pose of the object
+                s = time.time()
                 new_pose = env.update_pose_pcd()
+                print('Time for updating pose:', time.time() - s)
                 # override the pose of the object with the new pose
                 state['q'][:, -4:-1] = new_pose
                 state = state['q'].reshape(-1)[:15].to(device=params['device'])
