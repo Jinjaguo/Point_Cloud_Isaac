@@ -8,14 +8,12 @@ import copy
 from sklearn.neighbors import NearestNeighbors
 from torch.fx.experimental.unification.multipledispatch.dispatcher import source
 
-import data_vis
-
 sys.path.append('..')
 
 
-# import pytorch_volumetric as pv
-# import pytorch_kinematics as pk
-# from ccai.utils.allegro_utils import *
+import pytorch_volumetric as pv
+import pytorch_kinematics as pk
+from ccai.utils.allegro_utils import *
 
 
 class Sample_Points():
@@ -62,11 +60,14 @@ class points_registration():
         pass
 
     def get_pose_estimation(self, point_cloud, sampled_surface_points):
+        import time
         """
         使用下采样、法向量估计、FPFH + RANSAC、ICP来对齐点云。
         point_cloud:     (N,3) 的源点云 (numpy)
         sampled_surface_points: (M,3) 的目标点云 (numpy)
         """
+        import time
+        time_start = time.time()
         # 1) 将 numpy 转成 open3d PointCloud
         o3d_source = o3d.geometry.PointCloud()
         o3d_source.points = o3d.utility.Vector3dVector(point_cloud)
@@ -122,8 +123,6 @@ class points_registration():
                             [0., 0., 0., 1.]])
 
         # print("[RANSAC] start...")
-        import time
-        time_start = time.time()
         result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
             source_down,
             target_down,
@@ -137,7 +136,7 @@ class points_registration():
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
             ],
-            o3d.pipelines.registration.RANSACConvergenceCriteria(500000, 0.9999)
+            o3d.pipelines.registration.RANSACConvergenceCriteria(50000, 0.999)
         )
 
         T_ransac = result_ransac.transformation
@@ -218,11 +217,11 @@ class points_registration():
         )
         time_end = time.time()
         time = time_end - time_start
-        # print(f"Time used for ICP: {time:.2f}s")
+        print(f"Time used for getting pose estimation: {time:.6f}s")
         # print("[ICP] Final Transform:\n", result_icp_fine.transformation)
 
         # 7) 可视化
-        # self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
+        self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
 
 
         return result_icp_fine.transformation
