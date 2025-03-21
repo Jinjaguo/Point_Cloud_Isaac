@@ -8,28 +8,28 @@ FINGER_TO_IDX = {
 }
 
 
-def _preprocess_fingers(q, contact_scenes):
+def _preprocess_fingers(q_state, contact_scenes):
     """
-    :param q: (1, 1, 16)
+    :param q_state: (1, 1, 16)
     :param contact_scenes: the object provided by scene_collision_check(...)
     :return: data: a dictionary containing sdf and grad_sdf for each finger
     """
     data = {}
     fingers = ['index', 'middle', 'thumb']
     # q: (N, T, 16) = (1, 1, 16)
-    N, T, d = q.shape
+    N, T, d = q_state.shape
     assert d == 16, f"Expect last dim=16, but got {d}"
 
-    q_b = q[..., :12].reshape(-1, 4 * len(fingers))
+    q_b = q_state[..., :12].reshape(-1, 4 * len(fingers))
 
-    theta = q[..., 12:15]  # shape [N, T, 3]
+    theta = q_state[..., 12:15]  # shape [N, T, 3]
     theta_b = theta.reshape(-1, 3)
     theta_obj_joint = torch.zeros((theta_b.shape[0], 1),
                                   device=theta_b.device)
     # add a dimension for the cap of the screwdriver
     theta_b = torch.cat((theta_b, theta_obj_joint), dim=1)
 
-    full_q = partial_to_full_state(q_b, fingers=fingers)
+    full_q = partial_to_full_state(q_b, fingers=fingers) # full_q is a tensor of shape [N, T, 16]
 
     ret_scene = contact_scenes.scene_collision_check(full_q, theta_b,
                                                      compute_gradient=True,
@@ -42,17 +42,18 @@ def _preprocess_fingers(q, contact_scenes):
         data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, T, d)
         data[finger]['grad_env_sdf'] = ret_scene['grad_env_sdf'][:, i, :3]
 
+    sdf = ret_scene.get('sdf', None)
     grad_g_theta = ret_scene.get('grad_env_sdf', None)
-    print(grad_g_theta.shape)
+    grad_g_q = ret_scene.get('grad_sdf', None)
     return data
 
 
-def contact_constraints(q, finger_name, contact_scenes, compute_grads=True, compute_hess=False, terminal=False,
+def contact_constraints(q_state, finger_name, contact_scenes, compute_grads=True, compute_hess=False, terminal=False,
                         projected_diffusion=False):
     """
 
-        :param q: state tensor shape [N, T, 16],
-        :param finger_name: the name of the current finger, such as "index", "middle", "ring", "thumb"
+        :param q_state: state tensor shape [N, T, 16],
+        :param finger_name: the name of the current finger, such as "index", "middle", "thumb"
         :param contact_scenes: the object provided by scene_collision_check(...)
         :param compute_grads: whether to return gradients (usually only required under autograd)
         :param compute_hess: ignore or leave blank here
@@ -63,49 +64,35 @@ def contact_constraints(q, finger_name, contact_scenes, compute_grads=True, comp
         g: shape [N, M], M = T-offset or 1
         grad_g: shape [N, M, T*d], or the shape you want
     """
-    N, T, _ = q.shape  # [1, 1, 16]
-    data = _preprocess_fingers(q, contact_scenes)
+    N, T, d = q_state.shape
+    data = _preprocess_fingers(q_state, contact_scenes)
     ret_scene = data[finger_name]
     g = ret_scene.get('sdf').reshape(N, 1, 1)
     grad_g_q = ret_scene.get('grad_sdf', None)
     grad_g_theta = ret_scene.get('grad_env_sdf', None)
-    print(grad_g_theta)
-
-    T_offset = 0 if projected_diffusion else min(1, T - 1)
-    d = 32 + 15  # 32 + obj_dof(15) = 47
-    if compute_grads:
-        T_range = torch.arange(T, device=q.device)
-        # compute gradient of sdf
-        grad_g = torch.zeros(N, T, T, d, device=q.device)
-        grad_g[:, T_range, T_range, :16] = grad_g_q[:, T_offset:]
-        grad_g[:, T_range, T_range, 16: 16 + 3] = grad_g_theta.reshape(N, T + T_offset, 3)[:,
-                                                  T_offset:]
-        grad_g = grad_g.reshape(N, -1, T, d)
-        grad_g = grad_g.reshape(N, -1, T * d)
-        print(grad_g.shape)  # torch.Size([1, 1, 47])
-        if terminal:
-            grad_g = grad_g[:, -1].reshape(N, 1, T * d)
-    else:
-        return g, None, None
-
-    if compute_hess:
-        hess = torch.zeros(N, g.shape[1], T * d, T * d, device=q.device)
-        return g, grad_g, hess
-
+    if finger_name == 'thumb':
+        grad_g_q = - grad_g_q
+    elif finger_name == 'index':
+        pass
+    elif finger_name == '':
+        pass
+    grad_g = None
     return g, grad_g, None
 
 
-def update(q_state, contact_scenes, finger_list=('index', 'middle', 'thumb'), max_steps=200, threshold=1e-3):
+def update(q_state, contact_scenes, finger_list=('index', 'middle', 'thumb'), max_steps=200, threshold=1e-3, lambda_=1e-2):
     """
-    :param q_state: shape [1, 1, 16], where the first 12 dimensions are fingers (4 fingers x 3 dof), the last 4
-    dimensions are objects (roll, pitch, yaw, etc).
+    :param q_state: state we will update, shape [1, 1, 16], where the first 12 dimensions are fingers (4 fingers x 3 dof), the last 4
+    dimensions are objects (roll, pitch, yaw, and cap joint).
     :param contact_scenes: the object provided by scene_collision_check(...)
     :param finger_list: the list of fingers to optimize
     :param max_steps: maximum number of optimization steps
     :param threshold: the threshold for early stopping
+    :param lambda_: weight for the regularization term (keep object pose close to initial pose)
     :return: the optimized q_tensor
     """
     q_tensor = q_state.reshape(1, 1, 16).clone().detach()
+    init_object_pose = q_tensor[..., 12:].detach().clone()
     q_tensor.requires_grad_(True)
     optimizer = torch.optim.Adam([q_tensor], lr=1e-3)
 
@@ -124,26 +111,40 @@ def update(q_state, contact_scenes, finger_list=('index', 'middle', 'thumb'), ma
         # calculate sdf and grad
         for finger_name in finger_list:
             g = data[finger_name]['sdf']  # => shape [N, T], [1,1]
-            grad_sdf = data[finger_name]['grad_sdf']  # => [N, T, 16]
 
-            # print(grad_sdf)
+            grad_sdf = data[finger_name]['grad_sdf']  # => [N, T, 16]
+            grad_sdf_index = grad_sdf[:, :, :4]  # first four dimensions are for index finger
+            grad_sdf_middle = grad_sdf[:, :, 4:8]  # next four dimensions are for middle finger
+            # we ignore the ring finger because it is not used.
+            grad_sdf_thumb = grad_sdf[:, :, 12:]  # last four dimensions are for thumb finger
+            # combine the gradients of all fingers should be [1, 1, 12]
+            grad_sdf_finger = torch.cat((grad_sdf_index, grad_sdf_middle, grad_sdf_thumb), dim=2)
+
+            grad_g_theta = data[finger_name]['grad_env_sdf']  # => [1, 1, 3]
+            grad_g_theta = grad_g_theta.reshape(1, 1, -1)  # => [1, 1, 3]
+            grad_g_theta = torch.cat([grad_g_theta, torch.zeros((1, 1, 1), device=grad_g_theta.device)], dim=2)
+            grad_sdf_all = torch.cat((grad_sdf_finger, grad_g_theta), dim=2)  # => [N, T, 16]
+
+
             import torch.nn.functional as F
             g_eff = F.relu(g)  # g_eff = max(g, 0), a non-negative sdf value
             sdf_vals[finger_name] = g_eff.mean().item()  # record
             # partial_grad
             gf_flat = g_eff.view(-1)  # shape=[1]
-            if finger_name == 'thumb':
-                #
-                gradgf_flat = -grad_sdf.view(-1, q_tensor.shape[-1])  # shape=[1, 16]
-            else:
-                gradgf_flat = grad_sdf.view(-1, q_tensor.shape[-1])  # shape=[1, 16]
-
+            gradgf_flat = grad_sdf_all.view(-1, q_tensor.shape[-1])  # shape=[1, 16]
             # cost=0.5*g^2 => grad(cost)=g * grad(g)
             # this is the gradient of the cost function w.r.t. q_tensor
             partial_grad = (gf_flat.unsqueeze(-1) * gradgf_flat).sum(dim=0)  # [16]
             # print(f'finger_name:{finger_name}, partial_grad:{partial_grad}')
             partial_grad = partial_grad.view(q_tensor.shape)  # shape=[1, 1, 16]
             total_grad += partial_grad
+
+        # cost_reg = 0.5 * lambda_ * || (theta - theta_init) ||^2
+        # => grad( cost_reg, theta ) = lambda_ * (theta - theta_init)
+        curr_obj_pose = q_tensor[..., 12:]  # [1,1,4]
+        reg_diff = (curr_obj_pose - init_object_pose)
+        reg_grad = lambda_ * reg_diff  # [1,1,4]
+        total_grad[..., 12:] += reg_grad
 
         q_tensor.grad = total_grad
         # q_tensor has been updated

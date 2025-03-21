@@ -408,9 +408,8 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 # update the q_tensor with grad_g using contact constrain only
                 # q_tensor = update(q_tensor, contact_scenes)
-                q_tensor = update_with_dif_lr(q_tensor, contact_scenes)
+                q_tensor = update(q_tensor, contact_scenes)
                 data = _preprocess_fingers(q_tensor, contact_scenes)
-                print(q_tensor)
                 for finger in fingers:
                     g = data[finger]['sdf']
                     print(f'{finger}_sdf is {g.item()}')

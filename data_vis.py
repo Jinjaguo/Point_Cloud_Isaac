@@ -7,18 +7,18 @@ import matplotlib.pyplot as plt
 # 1. 定义两个目录：base_dir, compare_dir
 #####################################
 base_dir = './data/experiments/allegro_screwdriver_diff_only_1./csvgd'
-compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_1./csvgd'
+compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided./csvgd'
 save_dir = './data/experiments/'
 
 # trial 和 stage 的范围
-num_trials = 30
+num_trials = 7
 num_stages = 12
 
 
 #####################################
 # 2. 写一个函数，用来读取某个目录下所有 trial/stage 的数据
 #####################################
-def process_directory(directory, num_trials=30, num_stages=12, num_steps=12):
+def process_directory(directory, num_trials=num_trials  , num_stages=num_stages, num_steps=12):
     """
     读取给定目录下 trial_1 到 trial_N，每个 trial 有 stage_0.csv 到 stage_{num_stages-1}.csv
     每个 csv 包含 3 个 finger 的 yaw 和 sdf 数据，每行对应一个 step，共 num_steps 个 step
@@ -109,9 +109,9 @@ plt.xlabel('Stage')
 plt.ylabel('Yaw Difference (Compare - Base) (rads)')
 plt.title('Yaw Difference Per Trail (Compare - Base)')
 plt.grid(True)
-plt.savefig(f'{save_dir}/yaw_difference_each_trail.png')
+# plt.savefig(f'{save_dir}/yaw_difference_each_trail.png')
 plt.show()
-plt.close()
+# plt.close()
 
 
 # 绘制 Delta Yaw 比较图（添加连线）
@@ -127,9 +127,9 @@ plt.ylabel('Yaw Difference (Compare - Base) (rads)')
 plt.title('Yaw Difference Per Step (Compare - Base)')
 plt.grid(True)
 plt.legend()
-plt.savefig(f'{save_dir}/yaw_difference_each_step.png')
+# plt.savefig(f'{save_dir}/yaw_difference_each_step.png')
 plt.show()
-plt.close()
+# plt.close()
 
 
 #####################################
@@ -182,7 +182,7 @@ for finger in fingers:
     plt.title(f'SDF Comparison for {finger.capitalize()} Finger')
     plt.legend()
     plt.grid(True)
-    plt.savefig(f'{save_dir}/{finger.capitalize()}_sdf_comparison.png')
+    # plt.savefig(f'{save_dir}/{finger.capitalize()}_sdf_comparison.png')
     plt.show()
-    plt.close()
+    # plt.close()
 

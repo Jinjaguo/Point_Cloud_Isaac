@@ -3,7 +3,7 @@ T: 12
 receding_horizon: False
 num_steps: 12
 num_turns: 3
-num_trials: 10
+num_trials: 30
 visualize: True
 experiment_name: 'allegro_screwdriver_diff_init_sdf_guided'
 # experiment_name: 'allegro_screwdriver_diff_only_2'
