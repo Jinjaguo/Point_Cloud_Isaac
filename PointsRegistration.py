@@ -221,7 +221,7 @@ class points_registration():
         # print("[ICP] Final Transform:\n", result_icp_fine.transformation)
 
         # 7) 可视化
-        # self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
+        self.draw_registration_result(np.asarray(o3d_source.points),np.asarray(o3d_target.points), result_icp_fine.transformation)
 
 
         return result_icp_fine.transformation

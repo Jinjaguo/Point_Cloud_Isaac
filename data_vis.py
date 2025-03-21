@@ -7,11 +7,11 @@ import matplotlib.pyplot as plt
 # 1. 定义两个目录：base_dir, compare_dir
 #####################################
 base_dir = './data/experiments/allegro_screwdriver_diff_only_1./csvgd'
-compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided./csvgd'
+compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_2./csvgd'
 save_dir = './data/experiments/'
 
 # trial 和 stage 的范围
-num_trials = 7
+num_trials = 10
 num_stages = 12
 
 
@@ -98,6 +98,11 @@ num_total_stages = num_trials * num_stages
 # 绘制 Yaw 比较图（添加连线）
 # 计算差值：compare_stage_yaws - base_stage_yaws
 yaw_difference = np.array(compare_stage_yaws) - np.array(base_stage_yaws)
+print(np.mean(compare_stage_yaws))
+print(np.mean(base_stage_yaws))
+print(yaw_difference)
+mean_yaw_difference = np.mean(yaw_difference)
+print(mean_yaw_difference)
 indices = np.where(yaw_difference< 0)[0]
 print(indices)
 # 绘制差值柱状图
@@ -109,16 +114,16 @@ plt.xlabel('Stage')
 plt.ylabel('Yaw Difference (Compare - Base) (rads)')
 plt.title('Yaw Difference Per Trail (Compare - Base)')
 plt.grid(True)
-# plt.savefig(f'{save_dir}/yaw_difference_each_trail.png')
+plt.savefig(f'{save_dir}/yaw_difference_each_trail.png')
 plt.show()
-# plt.close()
+plt.close()
 
 
 # 绘制 Delta Yaw 比较图（添加连线）
 plt.figure(figsize=(8, 5))
 step_yaw_difference = np.array(compare_stage_delta_yaws) - np.array(base_stage_delta_yaws)
-indices = np.where(step_yaw_difference < 0)[0]
-print(indices)
+# indices = np.where(step_yaw_difference < 0)[0]
+# print(indices)
 plt.bar(range(1, num_total_stages + 1), step_yaw_difference, label='step_yaw_difference', width=0.5, align='center', alpha=0.7, color='blue')
 # 添加参考线 y=0
 plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
@@ -127,9 +132,9 @@ plt.ylabel('Yaw Difference (Compare - Base) (rads)')
 plt.title('Yaw Difference Per Step (Compare - Base)')
 plt.grid(True)
 plt.legend()
-# plt.savefig(f'{save_dir}/yaw_difference_each_step.png')
+plt.savefig(f'{save_dir}/yaw_difference_each_step.png')
 plt.show()
-# plt.close()
+plt.close()
 
 
 #####################################
@@ -165,16 +170,16 @@ for finger in fingers:
 
     # 画每个 trial 的曲线
     for i in range(num_trials):
-        plt.plot(range(num_steps), base_sdf_array[i, :], color='blue', alpha=0.15)
-        plt.plot(range(num_steps), compare_sdf_array[i, :], color='red', alpha=0.15)
+        plt.plot(range(num_steps), base_sdf_array[i, :], color='red', alpha=0.15)
+        plt.plot(range(num_steps), compare_sdf_array[i, :], color='blue', alpha=0.15)
 
     # 画 Base 均值和标准差范围
-    plt.plot(range(num_steps), base_mean, color='blue', linewidth=2, label='Base Mean')
-    plt.fill_between(range(num_steps), base_mean - base_std, base_mean + base_std, color='blue', alpha=0.2)
+    plt.plot(range(num_steps), base_mean, color='red', linewidth=2, label='Compare Mean')
+    plt.fill_between(range(num_steps), base_mean - base_std, base_mean + base_std, color='red', alpha=0.2)
 
     # 画 Compare 均值和标准差范围
-    plt.plot(range(num_steps), compare_mean, color='red', linewidth=2, label='Compare Mean')
-    plt.fill_between(range(num_steps), compare_mean - compare_std, compare_mean + compare_std, color='red', alpha=0.2)
+    plt.plot(range(num_steps), compare_mean, color='blue', linewidth=2, label='base Mean')
+    plt.fill_between(range(num_steps), compare_mean - compare_std, compare_mean + compare_std, color='blue', alpha=0.2)
 
     # 图表设置
     plt.xlabel('Step')
@@ -182,7 +187,7 @@ for finger in fingers:
     plt.title(f'SDF Comparison for {finger.capitalize()} Finger')
     plt.legend()
     plt.grid(True)
-    # plt.savefig(f'{save_dir}/{finger.capitalize()}_sdf_comparison.png')
+    plt.savefig(f'{save_dir}/{finger.capitalize()}_sdf_comparison.png')
     plt.show()
-    # plt.close()
+    plt.close()
 

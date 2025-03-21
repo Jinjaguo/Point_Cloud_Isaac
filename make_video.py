@@ -36,6 +36,6 @@ def create_video_from_folder(folder_path, output_path, fps=30):
     print("saved in", output_path)
 
 
-folder_path = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_1./csvgd/trial_1'
-output_path = folder_path + '/diff_init_sdf_guided.mp4'
+folder_path = './data/experiments/fail'
+output_path = folder_path + '/fail.mp4'
 create_video_from_folder(folder_path, output_path)

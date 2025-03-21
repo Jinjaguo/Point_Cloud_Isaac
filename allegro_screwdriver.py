@@ -651,6 +651,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                                                 planner.problem.data['middle']['sdf'].reshape(N, T + 1),
                                                 planner.problem.data['thumb']['sdf'].reshape(N, T + 1)),
                                                 dim=1).detach().cpu()
+                print('Contact distance:', contact_distance[T])
 
                 contact_points[T] = torch.stack((planner.problem.data['index']['closest_pt_world'].reshape(N, T + 1, 3),
                                                 planner.problem.data['middle']['closest_pt_world'].reshape(N, T + 1, 3),
@@ -740,7 +741,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         # actual_trajectory.append(env.get_state()['q'].reshape(9).to(device=params['device']))
         actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
         # can't stack plans as each is of a different length
-        points_path = "./pointclouds"
         # env.save_to_csv(ori_list, pos_list, points_path)
 
         # for memory reasons we clear the data

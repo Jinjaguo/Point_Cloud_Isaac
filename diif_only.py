@@ -320,6 +320,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             plans = None
             # use results_n2r to record the sdf of each finger in gym env and yaw after the action
             results_n2r = []
+            data_pos = []
 
             # size of state is 15
             dx = 15
@@ -333,9 +334,13 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 state = env.get_state()
                 # roll pitch yaw of the screwdriver
                 print('Pose before step:')
-                print(state['q'][:, -4:-1].detach().cpu().numpy())
+                pose = state['q'][:, -4:-1].detach().cpu().numpy()
+                print(pose)
                 # using the cloud point to update the pose of the object
                 new_pose = env.update_pose_pcd()
+                data_pos.append({'pose': pose,
+                                 'new_pose': new_pose.detach().cpu().numpy(),
+                                 })
                 # override the pose of the object with the new pose
                 state['q'][:, -4:-1] = new_pose
                 state = state['q'].reshape(-1)[:15].to(device=params['device'])
@@ -356,25 +361,16 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 print(f'Solve time for step {k + 1}', time.time() - s)
 
                 # record the actual trajectory
-                if mode == 'turn':
-                    index_force = torch.norm(best_traj[..., 27:30], dim=-1)
-                    middle_force = torch.norm(best_traj[..., 30:33], dim=-1)
-                    thumb_force = torch.norm(best_traj[..., 33:36], dim=-1)
-                    print('Middle force:', middle_force)
-                    print('Thumb force:', thumb_force)
-                    print('Index force:', index_force)
-                elif mode == 'index':
-                    middle_force = torch.norm(best_traj[..., 27:30], dim=-1)
-                    thumb_force = torch.norm(best_traj[..., 30:33], dim=-1)
-                    print('Middle force:', middle_force)
-                    print('Thumb force:', thumb_force)
-                elif mode == 'thumb_middle':
-                    index_force = torch.norm(best_traj[..., 27:30], dim=-1)
-                    print('Index force:', index_force)
+                index_force = torch.norm(best_traj[..., 27:30], dim=-1)
+                middle_force = torch.norm(best_traj[..., 30:33], dim=-1)
+                thumb_force = torch.norm(best_traj[..., 33:36], dim=-1)
+                print('Middle force:', middle_force)
+                print('Thumb force:', thumb_force)
+                print('Index force:', index_force)
 
                 x = best_traj[0, :dx + du]
                 x = x.reshape(1, dx + du)
-                action = x[:, dx:du + du].to(device=env.device)
+                action = x[:, dx:dx + du].to(device=env.device)
 
                 xu = torch.cat((state[:-1].cpu(), action[0].cpu()))
                 actual_trajectory.append(xu)
@@ -400,14 +396,17 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                     results_n2r.append({
                         'yaw': yaw_n2r,
                         'finger': finger,
-                        'sdf': g.cpu().detach().numpy()  # 转换为numpy方便保存
+                        'sdf': g.cpu().detach().numpy(),
+                        'index_force': index_force.detach().cpu().numpy(),
+                        'middle_force': middle_force.detach().cpu().numpy(),
+                        'thumb_force': thumb_force.detach().cpu().numpy(),  # 转换为numpy方便保存
                     })
             import pandas as pd
             df = pd.DataFrame(results_n2r)
-
+            df2 = pd.DataFrame(data_pos)
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
 
-            return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance, df
+            return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance, df, df2
 
             data = {}
             for t in range(1, 1 + params['T']):
@@ -452,27 +451,31 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
             if contact == 'index':
                 _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
+                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df, df2 = execute_traj(
                     None, mode='index', goal=_goal, fname=f'index_regrasp_{stage}')
                 traj = torch.cat((traj[..., :-6], torch.zeros(*traj.shape[:-1], 3).to(device=params['device']),
                                   traj[..., -6:]), dim=-1)
                 df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
+                df2.to_csv(fpath / f'pose_results_{stage}.csv', index=False)
                 print(f'saving sdf results to csv file')
 
             elif contact == 'thumb_middle':
                 _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
+                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df, df2 = execute_traj(
                     None, mode='thumb_middle',
                     goal=_goal, fname=f'thumb_middle_regrasp_{stage}')
                 traj = torch.cat((traj, torch.zeros(*traj.shape[:-1], 6).to(device=params['device'])), dim=-1)
                 df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
+                df2.to_csv(fpath / f'pose_results_{stage}.csv', index=False)
                 print(f'saving sdf results to csv file')
 
             elif contact == 'turn':
                 _goal = torch.tensor([0, 0, state[-1] - np.pi / 6]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
+                print('---------->  Goal is:', state[-1] - np.pi / 6)
+                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df, df2 = execute_traj(
                     None, mode='turn', goal=_goal, fname=f'turn_{stage}')
                 df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
+                df2.to_csv(fpath / f'pose_results_{stage}.csv', index=False)
                 print(f'saving sdf results to csv file')
 
             if contact != 'pregrasp':

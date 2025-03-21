@@ -4,6 +4,8 @@ from isaac_victor_envs.tasks.allegro import AllegroScrewdriverTurningEnv
 
 import sys
 
+from tenacity import after_log
+
 sys.path.append('..')
 from model import LatentDiffusionModel
 
@@ -359,25 +361,16 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 print(f'Solve time for step {k + 1}', time.time() - s)
 
                 # record the actual trajectory
-                if mode == 'turn':
-                    index_force = torch.norm(best_traj[..., 27:30], dim=-1)
-                    middle_force = torch.norm(best_traj[..., 30:33], dim=-1)
-                    thumb_force = torch.norm(best_traj[..., 33:36], dim=-1)
-                    print('Middle force:', middle_force)
-                    print('Thumb force:', thumb_force)
-                    print('Index force:', index_force)
-                elif mode == 'index':
-                    middle_force = torch.norm(best_traj[..., 27:30], dim=-1)
-                    thumb_force = torch.norm(best_traj[..., 30:33], dim=-1)
-                    print('Middle force:', middle_force)
-                    print('Thumb force:', thumb_force)
-                elif mode == 'thumb_middle':
-                    index_force = torch.norm(best_traj[..., 27:30], dim=-1)
-                    print('Index force:', index_force)
+                index_force = torch.norm(best_traj[..., 27:30], dim=-1)
+                middle_force = torch.norm(best_traj[..., 30:33], dim=-1)
+                thumb_force = torch.norm(best_traj[..., 33:36], dim=-1)
+                print('Middle force:', middle_force)
+                print('Thumb force:', thumb_force)
+                print('Index force:', index_force)
 
                 x = best_traj[0, :dx + du]
                 x = x.reshape(1, dx + du)
-                action = x[:, dx:du + du].to(device=env.device)
+                action = x[:, dx:dx + du].to(device=env.device)
 
                 xu = torch.cat((state[:-1].cpu(), action[0].cpu()))
                 actual_trajectory.append(xu)
@@ -389,53 +382,57 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 state = env.get_state()
                 state = state['q'].reshape(-1).to(device=params['device'])
-                ori = state[:15][-3:]
-                print('ori after step:', ori)
+                ori = state[:15][-1]
+                print('--->>>> ori after step:', ori)
 
                 # make sure contact constraint is satisfied
                 # 16 = 4*3(finger number) + 4(roll pitch yaw and 1 screwdriver-cap joint)
-                from only_sdf_planner import update, update_with_dif_lr, _preprocess_fingers
+                from only_sdf_planner import finger_wrapper, update, _preprocess_fingers
                 state = env.get_state()
                 q_state = state['q'][:16].reshape(-1).to(device=params['device'])
+                yaw_n2r = q_state[-2].item()
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
                 # print('q_tensor:', q_tensor.shape)
                 data = _preprocess_fingers(q_tensor, contact_scenes)
                 for finger in fingers:
                     g = data[finger]['sdf']
                     print(f'{finger}_sdf is {g.item()}')
-                # using gradient descent to satisfy the contact constraint
+                    results_n2r.append({
+                        'yaw': yaw_n2r,
+                        'finger': finger,
+                        'sdf': g.cpu().detach().numpy(),
+                        'index_force': index_force.detach().cpu().numpy(),
+                        'middle_force': middle_force.detach().cpu().numpy(),
+                        'thumb_force': thumb_force.detach().cpu().numpy(),  # 转换为numpy方便保存
+                    })
+                    # using gradient descent to satisfy the contact constraint
                 print('Solving contact constraint...')
 
                 # update the q_tensor with grad_g using contact constrain only
                 # q_tensor = update(q_tensor, contact_scenes)
                 q_tensor = update(q_tensor, contact_scenes)
-                data = _preprocess_fingers(q_tensor, contact_scenes)
-                for finger in fingers:
-                    g = data[finger]['sdf']
-                    print(f'{finger}_sdf is {g.item()}')
+                # data = _preprocess_fingers(q_tensor, contact_scenes)
+                # for finger in fingers:
+                #     g = data[finger]['sdf']
+                #     print(f'{finger}_sdf is {g.item()}')
                 # new_state = env.get_state()
-                action = q_tensor.detach().clone()[..., :4 * num_fingers]
-                action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
+                # action = q_tensor.detach().clone()[..., :4 * num_fingers]
+                # action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
                 print('force the finger to be in contact with the object')
-                env.step(action)
+                action = finger_wrapper(q_tensor)
+                env.single_step_q(action.to(device=env.device))
 
                 # record the sdf of each fingers in gym env
                 state_n2r = env.get_state()
                 q_state_n2r = state_n2r['q'][:16].reshape(1, 1, 16).to(device=params['device'])
                 yaw_n2r = q_state_n2r[:, :, -2].item()
-                data = _preprocess_fingers(q_state_n2r, contact_scenes)
-                for finger in fingers:
-                    g = data[finger]['sdf']
-                    print(f'{finger}_sdf is {g.item()}')
+                print('--->>>> ori after constraint:', yaw_n2r)
+                # update yaw_n2r in results_n2r
+                for item in results_n2r[-3:]:  # only update the last three items
+                    item['yaw'] = yaw_n2r
 
-                    results_n2r.append({
-                        'yaw': yaw_n2r,
-                        'finger': finger,
-                        'sdf': g.cpu().detach().numpy()  # 转换为numpy方便保存
-                    })
             import pandas as pd
             df = pd.DataFrame(results_n2r)
-
 
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
 
@@ -466,9 +463,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         for stage in range(num_stages):
             print('\n get state before the stage begins ')
             state = env.get_state()
+            print(state)
             state = state['q'].reshape(-1)[:15].to(device=params['device'])
             ori = state[:15][-3:]
-            yaw = ori[-1]
             _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
             # traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance = execute_traj(
             #     planner=None, mode='diffusion_policy', goal=_goal, fname=f'diffusion_policy_{stage}')
@@ -482,26 +479,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
             executed_contacts.append(contact)
             print(f'---Stage == {stage} Contact == {contact}---')
 
-            if contact == 'index':
-                _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
-                    None, mode='index', goal=_goal, fname=f'index_regrasp_{stage}')
-                traj = torch.cat((traj[..., :-6], torch.zeros(*traj.shape[:-1], 3).to(device=params['device']),
-                                  traj[..., -6:]), dim=-1)
-                df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
-                print(f'saving sdf results to csv file')
-
-            elif contact == 'thumb_middle':
-                _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])
-                traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
-                    None, mode='thumb_middle',
-                    goal=_goal, fname=f'thumb_middle_regrasp_{stage}')
-                traj = torch.cat((traj, torch.zeros(*traj.shape[:-1], 6).to(device=params['device'])), dim=-1)
-                df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
-                print(f'saving sdf results to csv file')
-
-            elif contact == 'turn':
+            if contact == 'turn':
                 _goal = torch.tensor([0, 0, state[-1] - np.pi / 6]).to(device=params['device'])
+                print('---------->  Goal is:', state[-1] - np.pi / 6)
                 traj, plans, inits, init_sim_rollouts, optimizer_paths, contact_points, contact_distance, df = execute_traj(
                     None, mode='turn', goal=_goal, fname=f'turn_{stage}')
                 df.to_csv(fpath / f'yaw_sdf_results_{stage}.csv', index=False)
