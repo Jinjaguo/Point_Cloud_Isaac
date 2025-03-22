@@ -11,7 +11,7 @@ compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_2./cs
 save_dir = './data/experiments/'
 
 # trial 和 stage 的范围
-num_trials = 10
+num_trials = 20
 num_stages = 12
 
 
@@ -112,9 +112,9 @@ plt.bar(range(1, num_total_stages + 1), yaw_difference, label='yaw_difference', 
 plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
 plt.xlabel('Stage')
 plt.ylabel('Yaw Difference (Compare - Base) (rads)')
-plt.title('Yaw Difference Per Trail (Compare - Base)')
+plt.title('Yaw Difference Per Trial (Compare - Base)')
 plt.grid(True)
-plt.savefig(f'{save_dir}/yaw_difference_each_trail.png')
+plt.savefig(f'{save_dir}/yaw_difference_each_trial.png')
 plt.show()
 plt.close()
 
