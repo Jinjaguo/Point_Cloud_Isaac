@@ -523,9 +523,7 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
             grad_g[:, T_range, T_range, :16] = grad_g_q[:, T_offset:]
             grad_g[:, T_range, T_range, 16: 16 + self.obj_dof] = grad_g_theta.reshape(N, T + T_offset, self.obj_dof)[:, T_offset:]
             grad_g = grad_g.reshape(N, -1, T, d)
-            print(grad_g.shape)
             grad_g = grad_g.reshape(N, -1, T * d)
-            print(grad_g.shape)
             if terminal:
                 grad_g = grad_g[:, -1].reshape(N, 1, T * d)
         else:

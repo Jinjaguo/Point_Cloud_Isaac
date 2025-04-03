@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import math
+
+# from examples.graphics import handle
 from isaacgym import gymapi
 from isaacgym import gymutil
 from isaacgym import gymtorch
@@ -190,6 +192,7 @@ class AllegroEnv:
 
         # asset_options.disable_gravity = True
         allegro_asset = self.gym.load_asset(self.sim, self.asset_root, urdf, asset_options)
+        self.allegro_asset = self.gym.load_asset(self.sim, self.asset_root, urdf, asset_options)
         # asset_options.disable_gravity = not gravity
         # Get joint limits
         allegro_dof_props = self.gym.get_asset_dof_properties(allegro_asset)
@@ -266,6 +269,24 @@ class AllegroEnv:
         self.finger_ee_index = {finger: self.gym.find_asset_rigid_body_index(allegro_asset, finger_to_ee_name[finger])
                                 for finger in self.fingers}
         self.num_dofs = num_dofs
+        self.force_sensor_indices = {}
+        self.force_sensor_handles = {}
+
+        offsets = {
+            'index': gymapi.Vec3(0.0, 0.0, 0.03),
+            'middle': gymapi.Vec3(0.0, 0.0, 0.03),
+            'thumb': gymapi.Vec3(0.0, -0.015, 0.025),
+        }
+
+        for finger, body_idx in self.finger_ee_index.items():
+            offset = offsets[finger]
+            sensor_pose = gymapi.Transform(offset)  # 可根据具体情况微调
+            sensor_props = gymapi.ForceSensorProperties()
+            sensor_props.enable_forward_dynamics_forces = True
+            sensor_props.enable_constraint_solver_forces = True
+            sensor_props.use_world_frame = True
+            sensor_idx = self.gym.create_asset_force_sensor(allegro_asset, body_idx, sensor_pose,sensor_props)
+            self.force_sensor_indices[finger] = sensor_idx
 
         self._rb_states, self.rb_states = None, None
         self._actor_rb_states, self.actor_rb_states = None, None
@@ -503,6 +524,19 @@ class AllegroEnv:
         self.gym.refresh_mass_matrix_tensors(self.sim)
         self.gym.refresh_force_sensor_tensor(self.sim)
 
+    def single_step_q(self, actions):
+        des_q = actions.clone()
+        self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(des_q))
+        self._step_sim()
+        self._refresh_tensors()
+
+        # update viewer
+        if self.viewer is not None:
+            self.gym.step_graphics(self.sim)
+            self.gym.draw_viewer(self.viewer, self.sim, True)
+            self.gym.sync_frame_time(self.sim)
+
+
     def single_step(self, actions):
         des_q = None
         torques = None
@@ -567,6 +601,14 @@ class AllegroEnv:
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
         else:
             self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(des_q))
+
+        self.gym.refresh_force_sensor_tensor(self.sim)
+        sensor_tensor = gymtorch.wrap_tensor(self.gym.acquire_force_sensor_tensor(self.sim))
+
+        for finger, sensor_idx in self.force_sensor_indices.items():
+            force = sensor_tensor[sensor_idx, 0:3]
+            torque = sensor_tensor[sensor_idx, 3:6]
+            print(f"[{finger}] Force: {force.cpu().numpy()} | Torque: {torque.cpu().numpy()}")
 
         self._step_sim()
         self._refresh_tensors()
@@ -841,38 +883,6 @@ class AllegroEnv:
 
         return points_screwdriver
 
-    def visualize_point_cloud_as_spheres(self, env, points, prefix="cloud_sphere"):
-        """
-        在 Isaac Gym 中，把 points (N,3) 中的每个点都可视化为一个 sphere actor。
-        - gym: gymapi.Gym 实例
-        - sim: 仿真对象
-        - env_handle: 指定要放在哪个 environment
-        - sphere_asset: 小球的 asset
-        - points: (N,3) 的点云
-        - prefix: 给 actor 命名时的前缀
-        """
-        radius = 0.02
-        asset_options = gymapi.AssetOptions()
-        asset_options.disable_gravity = True
-        sphere_asset = self.gym.create_sphere(self.sim, radius, asset_options)
-
-        max_num = 500
-        N = points.shape[0]
-        if N <= max_num:
-            return points
-        idx = np.random.choice(N, max_num, replace=False)
-        sample_points = points[idx]
-        group_id = 0
-        for i, pt in enumerate(sample_points):
-            x, y, z = pt
-            # 每个小球 actor 的初始变换
-            pose = gymapi.Transform()
-            pose.p = gymapi.Vec3(x, y, z)
-
-            actor_name = f"{prefix}_{i}"
-            self.gym.create_actor(env, sphere_asset, pose, actor_name, group_id, 1)
-        self.gym.simulate(self.sim)
-        self.gym.fetch_results(self.sim, True)
 
     def save_point_clouds(self, points, save_dir):
         import open3d as o3d
@@ -885,7 +895,7 @@ class AllegroEnv:
         pcd.points = o3d.utility.Vector3dVector(points_np)
 
         timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
-        # filename = f"pointcloud_{timestamp}.ply"
+        #filename = f"pointcloud_{timestamp}.ply"
         # save_path = os.path.join(save_dir, filename)
         # o3d.io.write_point_cloud(save_path, pcd)
         # print(f"Saved point cloud to: {save_path}")
@@ -928,83 +938,6 @@ class AllegroEnv:
         rot_matrix_copy = np.copy(rot_matrix)
         r = R.from_matrix(rot_matrix_copy)
         euler_angles = r.as_euler('xyz', degrees=False)
-        '''
-        # 1) 关节上下限 (根据 URDF limit)
-        q_guess = np.array([0.00160723,  0.01335732, -0.07890692])  # 初始值
-
-        # 2) 关节上下限 (根据 URDF limit)
-        bounds = [(-1.57, 1.57),  # q1 -> joint_1, axis x
-                  (-1.57, 1.57),  # q2 -> joint_2, axis y
-                  (-3.14, 3.14)]  # q3 -> joint_3, axis z
-
-
-        # === 需要先定义自己的 FK 和 cost_func ===#
-        def fk_screwdriver(q):
-            """
-            简化演示版：给定4个角度(弧度)，返回 base->cap 的 4x4 变换矩阵
-            具体实现要和你的 URDF 关节顺序对应
-            """
-            from math import sin, cos
-            Rx = np.array([[1, 0, 0, 0],
-                           [0, cos(q[0]), -sin(q[0]), 0],
-                           [0, sin(q[0]), cos(q[0]), 0],
-                           [0, 0, 0, 1]], dtype=np.float32)
-
-            Ry = np.array([[cos(q[1]), 0, sin(q[1]), 0],
-                           [0, 1, 0, 0],
-                           [-sin(q[1]), 0, cos(q[1]), 0],
-                           [0, 0, 0, 1]], dtype=np.float32)
-
-            Rz = np.array([[cos(q[2]), -sin(q[2]), 0, 0],
-                           [sin(q[2]), cos(q[2]), 0, 0],
-                           [0, 0, 1, 0],
-                           [0, 0, 0, 1]], dtype=np.float32)
-
-            # 固定关节 stick->body (xyz=0,0,0.1)
-            T_sb = np.array([[1, 0, 0, 0],
-                             [0, 1, 0, 0],
-                             [0, 0, 1, 0.1],
-                             [0, 0, 0, 1]], dtype=np.float32)
-
-            T_bc = np.array([[1, 0, 0, 0],
-                             [0, 1, 0, 0],
-                             [0, 0, 1, 0.1],
-                             [0, 0, 0, 1]], dtype=np.float32)
-            Rz4 = np.array([[cos(q[3]), -sin(q[3]), 0, 0],
-                            [sin(q[3]), cos(q[3]), 0, 0],
-                            [0, 0, 1, 0],
-                            [0, 0, 0, 1]], dtype=np.float32)
-            # T_bc = T_bc @ Rz4
-
-            # body_cap_joint: 先平移(0,0,0.1)，再绕z(q[3])
-
-            T_base_cap = Rx @ Ry @ Rz
-            return T_base_cap
-
-        def pose_error(q, T_target):
-            """
-            计算(q1,q2,q3,q4)与目标T_target的位姿误差，用于数值优化
-            """
-            from scipy.spatial.transform import Rotation as R
-            T = fk_screwdriver(q)
-            # 平移误差
-            trans_err = T[:3, 3] - T_target[:3, 3]
-            # 旋转误差(用旋转向量差)
-            R_current = R.from_matrix(T[:3, :3])
-            R_target = R.from_matrix(T_target[:3, :3].copy())
-            rot_err = R_current.as_rotvec() - R_target.as_rotvec()
-            return np.concatenate([trans_err, rot_err])
-
-        def cost_func(q):
-            err = pose_error(q, T_icp)
-            error1 = (err**2).sum()
-            error2 = 50 * (q[:3]**2).sum()
-            return error1 + error2
-
-        # === 数值优化 ===#
-        res = opt.minimize(cost_func, q_guess, method='SLSQP', bounds=bounds)
-        q_sol = res.x  # 得到 [q1, q2, q3]
-        '''
 
         # 1) interpret q1=roll, q2=pitch, q3=yaw
         roll = euler_angles[0]
@@ -1028,7 +961,6 @@ class AllegroEnv:
         return new_pose
 
     def update_pose_pcd(self):
-
         base_points_path = "./pointclouds"
         # base_pics_path = "./pics"
         # pics_path = self.get_new_folder(base_pics_path)
@@ -1051,18 +983,17 @@ class AllegroEnv:
             from PointsRegistration import points_registration
             import open3d as o3d
             reg = points_registration()
-            # point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
+            point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
 
             sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
             pc = np.asarray(sample_points.points)
 
             T_icp = reg.get_pose_estimation(point_cloud, pc)
 
-            T_delta = np.array(
-                [[-0.42959849999999999426, 0.45388388000000001732, 0.78336249000000002241, 0.95050291999999991788],
-                 [-0.69028433500000008216, -0.72216643499999999545, 0.04426025499999999835, -0.44512141999999998987],
-                 [0.58580586999999995079, -0.52198107500000001657, 0.61994334500000003452, 0.66040783499999999862],
-                 [0, 0, 0, 1]])
+            T_delta = np.array([[-0.42959849999999999426, 0.45388388000000001732, 0.78336249000000002241, 0.95050291999999991788],
+                                [-0.69028433500000008216, -0.72216643499999999545, 0.04426025499999999835, -0.44512141999999998987],
+                                [0.58580586999999995079, -0.52198107500000001657, 0.61994334500000003452, 0.66040783499999999862],
+                                [0, 0, 0, 1]])
             T_icp = T_icp @ T_delta
 
             # print(T_icp)
@@ -1070,6 +1001,7 @@ class AllegroEnv:
             new_pose = new_pose.unsqueeze(0)
 
             print('--------------using observation point cloud as input--------------------')
+
 
         return new_pose
 
@@ -1302,8 +1234,7 @@ class AllegroScrewdriverTurningEnv(AllegroEnv):
         results['screwdriver_ori_euler'] = screwdriver_ori_euler
         results['screwdriver_ori_axis_angle'] = screwdriver_ori_axis_angle
         # results['screwdriver_ori'] = screwdriver_ori_euler  # keeps using the euler angle since the pytorch volumetric might have to use it.
-        results[
-            'screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
+        results['screwdriver_ori'] = screwdriver_ori_axis_angle  # keeps using the euler angle since the pytorch volumetric might have to use it.
         results['screwdriver_angle'] = self._q[:, -1:]
 
         q = []
