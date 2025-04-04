@@ -602,16 +602,9 @@ class AllegroEnv:
         else:
             self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(des_q))
 
-        self.gym.refresh_force_sensor_tensor(self.sim)
-        sensor_tensor = gymtorch.wrap_tensor(self.gym.acquire_force_sensor_tensor(self.sim))
-
-        for finger, sensor_idx in self.force_sensor_indices.items():
-            force = sensor_tensor[sensor_idx, 0:3]
-            torque = sensor_tensor[sensor_idx, 3:6]
-            print(f"[{finger}] Force: {force.cpu().numpy()} | Torque: {torque.cpu().numpy()}")
-
         self._step_sim()
         self._refresh_tensors()
+        self.force_signal()
 
         # update viewer
         if self.viewer is not None:
@@ -620,6 +613,7 @@ class AllegroEnv:
             self.gym.sync_frame_time(self.sim)
 
     def step(self, actions, ignore_img=False):
+
         if self.gradual_control:
             state = self.get_state()
             robot_q = state['q'][:, :self.robot_dof]
@@ -644,6 +638,69 @@ class AllegroEnv:
         # print(self._q)
         # print(actions - self.get_state())
         return self.get_state()
+
+    def _force_signal(self):
+        step_force_data = {}
+
+        # Refresh the force sensor data from the simulator
+        self.gym.refresh_force_sensor_tensor(self.sim)
+        sensor_tensor = gymtorch.wrap_tensor(self.gym.acquire_force_sensor_tensor(self.sim))
+
+        # Collect force and torque data for each finger
+        for finger, sensor_idx in self.force_sensor_indices.items():
+            force = sensor_tensor[sensor_idx, 0:3]  # Extract force vector (fx, fy, fz)
+            torque = sensor_tensor[sensor_idx, 3:6]  # Extract torque vector (tx, ty, tz)
+            step_force_data[finger] = {
+                "force": force,
+                "torque": torque
+            }
+
+        # Record the force and torque data of this timestep
+        self.force_recordings.append(step_force_data)
+
+        # Thresholds for contact detection (from prior observation of minimum contact force)
+        contact_thresholds = {
+            "thumb": 0.325462,
+            "middle": 0.358472,
+            "index": 0.363329
+        }
+
+        # Check whether each finger is in contact (force magnitude >= threshold)
+        contact_flags = []
+        for finger in ["thumb", "middle", "index"]:
+            force_vec = step_force_data[finger]["force"]
+            force_mag = force_vec.norm().item()  # Compute the magnitude (Euclidean norm)
+            contact_flags.append(force_mag >= contact_thresholds[finger])  # True if in contact
+
+        print(contact_flags)  # Optional: for debugging
+        return tuple(contact_flags)  # Return a tuple of booleans: (thumb, middle, index)
+
+    # def save_force_recordings_to_csv(self, file_path):
+#         import pandas as pd
+#         rows = []
+#         for step_idx, step_data in enumerate(self.force_recordings):
+#             for finger, data in step_data.items():
+#                 if finger == 'q':
+#                     continue
+#                 force = data['force']
+#                 torque = data['torque']
+#                 force = force.cpu().numpy()
+#                 torque = torque.cpu().numpy()
+#
+#                 row = {
+#                     'step': step_idx,
+#                     'finger': finger,
+#                     'fx': float(force[0]),
+#                     'fy': float(force[1]),
+#                     'fz': float(force[2]),
+#                     'tx': float(torque[0]),
+#                     'ty': float(torque[1]),
+#                     'tz': float(torque[2]),
+#                 }
+#                 rows.append(row)
+#
+#         df = pd.DataFrame(rows)
+#         df.to_csv(file_path, index=False)
 
     def get_state(self):
         arm_q = {'arm_q': self._q[:, self.arm_index]}

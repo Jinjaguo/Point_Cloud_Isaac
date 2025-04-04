@@ -3,191 +3,86 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-#####################################
-# 1. 定义两个目录：base_dir, compare_dir
-#####################################
-base_dir = './data/experiments/allegro_screwdriver_diff_only_1./csvgd'
-compare_dir = './data/experiments/allegro_screwdriver_diff_init_sdf_guided_2./csvgd'
-save_dir = './data/experiments/'
+# 两个文件夹路径
+dirs = {
+    'diff_only': './data/experiments/allegro_screwdriver_diff_only_2./csvgd/trial_1',
+    'csvto': './data/experiments/allegro_screwdriver_diff_csvto_1./csvgd/trial_1'
+}
 
-# trial 和 stage 的范围
-num_trials = 20
-num_stages = 12
+finger_list = ["index", "middle", "thumb"]
+force_components = ["fx", "fy", "fz"]
+torque_components = ["tx", "ty", "tz"]
 
+# 用于保存每个 label、每个 finger 的力模和力矩模的均值（共12个文件，每个文件一个值）
+results = {
+    label: {
+        finger: {
+            "force_magnitude_mean": [],
+            "torque_magnitude_mean": []
+        } for finger in finger_list
+    } for label in dirs
+}
 
-#####################################
-# 2. 写一个函数，用来读取某个目录下所有 trial/stage 的数据
-#####################################
-def process_directory(directory, num_trials=num_trials  , num_stages=num_stages, num_steps=12):
-    """
-    读取给定目录下 trial_1 到 trial_N，每个 trial 有 stage_0.csv 到 stage_{num_stages-1}.csv
-    每个 csv 包含 3 个 finger 的 yaw 和 sdf 数据，每行对应一个 step，共 num_steps 个 step
+for label, data_dir in dirs.items():
+    file_list = sorted([f for f in os.listdir(data_dir) if f.endswith(".csv")])
 
-    返回:
-        - stage_yaws: list，长度 = num_trials * num_stages，每个元素是该 stage 的平均 yaw
-        - stage_delta_yaws: list，长度 = num_trials * num_stages，每个元素是该 stage 的平均 delta yaw
-        - stage_stepwise_sdf_means: dict, key 为 finger ('index','middle','thumb'),
-            value 为一个 list，长度 = num_trials * num_stages，每个元素是一个长度为 num_steps 的 list，
-            表示该 stage 中每个 step 的 SDF 均值
-    """
-    stage_yaws = []         # 存储每个 stage 的 yaw
-    stage_delta_yaws = []   # 存储每个 stage 的 delta yaw
-    stage_stepwise_sdf_means = {'index': [], 'middle': [], 'thumb': []}  # 存储每个 stage 的 12 个 step 的 SDF 值
+    for fname in file_list:
+        file_path = os.path.join(data_dir, fname)
+        df = pd.read_csv(file_path)
 
-    # 遍历每个 trial
-    for trial_idx in range(1, num_trials + 1):
-        trial_dir = os.path.join(directory, f'trial_{trial_idx}')
+        for finger in finger_list:
+            df_finger = df[df['finger'] == finger]
 
-        # 遍历该 trial 下的每个 stage
-        for stage_idx in range(num_stages):
-            csv_path = os.path.join(trial_dir, f'yaw_sdf_results_{stage_idx}.csv')
-            if not os.path.exists(csv_path):
-                raise FileNotFoundError(f"CSV file not found: {csv_path}")
+            # 力的模、力矩的模（对每个step，计算模长 -> 再求均值）
+            force_mags = np.sqrt(df_finger[force_components].pow(2).sum(axis=1))
+            torque_mags = np.sqrt(df_finger[torque_components].pow(2).sum(axis=1))
 
-            df = pd.read_csv(csv_path)
+            force_mean = force_mags.mean()
+            torque_mean = torque_mags.mean()
 
-            # 计算该 stage 的 yaw 值
-            # 假设每个 stage 有 12 行（12 个 step）的数据，每行 yaw 相同或者可以取 unique 后计算范围
-            yaws = np.abs(df['yaw'].unique())  # 得到该 stage 中所有 step 的 yaw（一般有 12 个值）
-            # 计算 yaw 范围：最大值 - 最小值
-            mean_yaw_this_stage = np.max(yaws) - np.min(yaws)
-            stage_yaws.append(mean_yaw_this_stage)
-
-            # 计算 delta yaw：对 yaws 做差分，并取平均（11 个 delta）
-            delta_yaws = np.abs(np.diff(yaws))
-            if len(delta_yaws) > 0:
-                mean_delta_this_stage = np.mean(delta_yaws)
-            else:
-                mean_delta_this_stage = 0.0
-            stage_delta_yaws.append(mean_delta_this_stage)
-
-            # 对于每个 finger，提取该 stage 中 12 个 step 的 SDF 值
-            for finger in ['index', 'middle', 'thumb']:
-                # 筛选出当前 finger 的所有行，顺序应对应 12 个 step
-                df_finger = df[df['finger'] == finger]
-                # 如果该 finger 数据不满 12 行，可考虑报错或填充
-                if len(df_finger) < num_steps:
-                    raise ValueError(f"Not enough steps for finger {finger} in {csv_path}")
-
-                # 依次提取每个 step 的 sdf 值，注意这里假设 sdf 字符串形如 "[[0.00123]]"
-                step_sdf_values = []
-                for step_idx in range(num_steps):
-                    val_str = df_finger.iloc[step_idx]['sdf']
-                    # 解析字符串中的数值
-                    step_sdf = float(val_str.strip('[]'))
-                    step_sdf_values.append(step_sdf)
-                # 将当前 stage 的 12 个 step 的 SDF 均值（这里已是每个 step 的值）存入结果字典
-                stage_stepwise_sdf_means[finger].append(step_sdf_values)
-
-    print(np.array(stage_yaws).shape, np.array(stage_delta_yaws).shape)
-    return stage_yaws, stage_delta_yaws, stage_stepwise_sdf_means
+            results[label][finger]["force_magnitude_mean"].append(force_mean)
+            results[label][finger]["torque_magnitude_mean"].append(torque_mean)
 
 
+# 绘图
+for finger in finger_list:
+    # for metric in ["force_magnitude_mean", "torque_magnitude_mean"]:
+    for metric in ["force_magnitude_mean"]:
+        plt.figure(figsize=(8, 4))
+        for label in dirs:
+            y = results[label][finger][metric]
+            plt.plot(range(1, len(y) + 1), y, marker='o', label=label)
+        plt.xlabel("step (1-12)")
+        plt.ylabel(f"{finger.capitalize()} {metric.replace('_', ' ').capitalize()}")
+        plt.title(f"{finger.capitalize()} {metric.replace('_', ' ').capitalize()} Comparison")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
 
-#####################################
-# 3. 分别读取 base_dir 和 compare_dir
-#####################################
-base_stage_yaws, base_stage_delta_yaws, base_sdf_data = process_directory(base_dir)
-compare_stage_yaws, compare_stage_delta_yaws, compare_sdf_data = process_directory(compare_dir)
-#####################################
-# 4. 可视化对比：Yaw & Delta Yaw
-#####################################
-# 计算每个 stage 的平均 Yaw 和 Delta Yaw
-num_total_stages = num_trials * num_stages
-
-# 绘制 Yaw 比较图（添加连线）
-# 计算差值：compare_stage_yaws - base_stage_yaws
-yaw_difference = np.array(compare_stage_yaws) - np.array(base_stage_yaws)
-print(np.mean(compare_stage_yaws))
-print(np.mean(base_stage_yaws))
-print(yaw_difference)
-mean_yaw_difference = np.mean(yaw_difference)
-print(mean_yaw_difference)
-indices = np.where(yaw_difference< 0)[0]
-print(indices)
-# 绘制差值柱状图
-plt.figure(figsize=(8, 5))
-plt.bar(range(1, num_total_stages + 1), yaw_difference, label='yaw_difference', width=0.5, align='center', alpha=0.7, color='blue')
-# 添加参考线 y=0
-plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
-plt.xlabel('Stage')
-plt.ylabel('Yaw Difference (Compare - Base) (rads)')
-plt.title('Yaw Difference Per Trial (Compare - Base)')
-plt.grid(True)
-plt.savefig(f'{save_dir}/yaw_difference_each_trial.png')
 plt.show()
-plt.close()
 
 
-# 绘制 Delta Yaw 比较图（添加连线）
-plt.figure(figsize=(8, 5))
-step_yaw_difference = np.array(compare_stage_delta_yaws) - np.array(base_stage_delta_yaws)
-# indices = np.where(step_yaw_difference < 0)[0]
-# print(indices)
-plt.bar(range(1, num_total_stages + 1), step_yaw_difference, label='step_yaw_difference', width=0.5, align='center', alpha=0.7, color='blue')
-# 添加参考线 y=0
-plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
-plt.xlabel('Stage')
-plt.ylabel('Yaw Difference (Compare - Base) (rads)')
-plt.title('Yaw Difference Per Step (Compare - Base)')
-plt.grid(True)
-plt.legend()
-plt.savefig(f'{save_dir}/yaw_difference_each_step.png')
-plt.show()
-plt.close()
+# compare 文件夹路径
+compare_dir = './data/experiments/allegro_screwdriver_diff_csvto_1./csvgd/trial_1'
 
+finger_list = ["index", "middle", "thumb"]
+force_components = ["fx", "fy", "fz"]
 
-#####################################
-# 5. 可视化对比：SDF (index, middle, thumb)
-#####################################
-# 说明：每个 finger 有 shape=(num_trials, num_stages) 的数据
-#       我们可以对每个 finger 画一张图，把 base & compare 都叠加。
-#####################################
-fingers = ['index', 'middle', 'thumb']
-num_steps=12
-for finger in fingers:
-    # 转换数据为 numpy 数组，确保 shape 为 (num_trials, num_steps)
-    base_sdf_array = np.array(base_sdf_data[finger])
-    compare_sdf_array = np.array(compare_sdf_data[finger])
+# 存储每个 finger 的所有力的模值（用于找最小）
+finger_force_magnitudes = {finger: [] for finger in finger_list}
 
-    # 转换数据单位为mm
-    base_sdf_array *= 100
-    compare_sdf_array *= 100
+# 遍历 compare 文件夹中的所有 CSV
+file_list = sorted([f for f in os.listdir(compare_dir) if f.endswith(".csv")])
+for fname in file_list:
+    df = pd.read_csv(os.path.join(compare_dir, fname))
 
-    if base_sdf_array.ndim == 1:
-        base_sdf_array = base_sdf_array.reshape(num_trials, num_steps)
-    if compare_sdf_array.ndim == 1:
-        compare_sdf_array = compare_sdf_array.reshape(num_trials, num_steps)
+    for finger in finger_list:
+        df_finger = df[df['finger'] == finger]
+        force_mags = np.sqrt(df_finger[force_components].pow(2).sum(axis=1))
+        finger_force_magnitudes[finger].extend(force_mags.values)
 
-    # 计算均值和标准差
-    base_mean = base_sdf_array.mean(axis=0)  # shape=(num_steps,)
-    base_std = base_sdf_array.std(axis=0)    # shape=(num_steps,)
-    compare_mean = compare_sdf_array.mean(axis=0)
-    compare_std = compare_sdf_array.std(axis=0)
-
-    # 绘图
-    plt.figure(figsize=(8, 5))
-
-    # 画每个 trial 的曲线
-    for i in range(num_trials):
-        plt.plot(range(num_steps), base_sdf_array[i, :], color='red', alpha=0.15)
-        plt.plot(range(num_steps), compare_sdf_array[i, :], color='blue', alpha=0.15)
-
-    # 画 Base 均值和标准差范围
-    plt.plot(range(num_steps), base_mean, color='red', linewidth=2, label='Compare Mean')
-    plt.fill_between(range(num_steps), base_mean - base_std, base_mean + base_std, color='red', alpha=0.2)
-
-    # 画 Compare 均值和标准差范围
-    plt.plot(range(num_steps), compare_mean, color='blue', linewidth=2, label='base Mean')
-    plt.fill_between(range(num_steps), compare_mean - compare_std, compare_mean + compare_std, color='blue', alpha=0.2)
-
-    # 图表设置
-    plt.xlabel('Step')
-    plt.ylabel('SDF/(mm)')
-    plt.title(f'SDF Comparison for {finger.capitalize()} Finger')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f'{save_dir}/{finger.capitalize()}_sdf_comparison.png')
-    plt.show()
-    plt.close()
-
+# 输出每个 finger 的最小力模值
+print("=== 最小接触信号阈值（compare 文件夹） ===")
+for finger in finger_list:
+    min_force = np.min(finger_force_magnitudes[finger])
+    print(f"{finger.capitalize()} 最小力模长: {min_force:.6f}")
