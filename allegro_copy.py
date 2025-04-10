@@ -269,24 +269,7 @@ class AllegroEnv:
         self.finger_ee_index = {finger: self.gym.find_asset_rigid_body_index(allegro_asset, finger_to_ee_name[finger])
                                 for finger in self.fingers}
         self.num_dofs = num_dofs
-        self.force_sensor_indices = {}
-        self.force_sensor_handles = {}
 
-        offsets = {
-            'index': gymapi.Vec3(0.0, 0.0, 0.03),
-            'middle': gymapi.Vec3(0.0, 0.0, 0.03),
-            'thumb': gymapi.Vec3(0.0, -0.015, 0.025),
-        }
-
-        for finger, body_idx in self.finger_ee_index.items():
-            offset = offsets[finger]
-            sensor_pose = gymapi.Transform(offset)
-            sensor_props = gymapi.ForceSensorProperties()
-            sensor_props.enable_forward_dynamics_forces = True
-            sensor_props.enable_constraint_solver_forces = True
-            sensor_props.use_world_frame = True
-            sensor_idx = self.gym.create_asset_force_sensor(allegro_asset, body_idx, sensor_pose,sensor_props)
-            self.force_sensor_indices[finger] = sensor_idx
 
         self._rb_states, self.rb_states = None, None
         self._actor_rb_states, self.actor_rb_states = None, None
@@ -608,8 +591,7 @@ class AllegroEnv:
 
         # update viewer
         if self.viewer is not None:
-            self.gym.step_graphics(self.sim)
-            self.gym.draw_viewer(self.viewer, self.sim, True)
+            self.gym.simulate(self.sim)
             self.gym.sync_frame_time(self.sim)
 
     def step(self, actions, ignore_img=False):
@@ -639,7 +621,31 @@ class AllegroEnv:
         # print(actions - self.get_state())
         return self.get_state()
 
-    def _force_signal(self):
+    def _force_signal(self, contact_points):
+        """
+        :param contact_points: 3d coordinates of contact points in the world frame
+        :return: 3d vector of contact forces in world frame
+        """
+
+        # TODO 拿到点后的坐标系的转化
+        self.force_sensor_indices = {}
+
+        offsets = {
+            'index': gymapi.Vec3(0.0, 0.0, 0.03),
+            'middle': gymapi.Vec3(0.0, 0.0, 0.03),
+            'thumb': gymapi.Vec3(0.0, -0.015, 0.025),
+        }
+
+        for finger, body_idx in self.finger_ee_index.items():
+            offset = offsets[finger]
+            sensor_pose = gymapi.Transform(offset)
+            sensor_props = gymapi.ForceSensorProperties()
+            sensor_props.enable_forward_dynamics_forces = True
+            sensor_props.enable_constraint_solver_forces = True
+            sensor_props.use_world_frame = True
+            sensor_idx = self.gym.create_asset_force_sensor(allegro_asset, body_idx, sensor_pose, sensor_props)
+            self.force_sensor_indices[finger] = sensor_idx
+
         step_force_data = {}
 
         # Refresh the force sensor data from the simulator
@@ -666,41 +672,28 @@ class AllegroEnv:
         }
 
         # Check whether each finger is in contact (force magnitude >= threshold)
-        contact_flags = []
+        force_vector = []
         for finger in ["thumb", "middle", "index"]:
             force_vec = step_force_data[finger]["force"]
-            force_mag = force_vec.norm().item()  # Compute the magnitude (Euclidean norm)
-            contact_flags.append(force_mag >= contact_thresholds[finger])  # True if in contact
+            force_vector.append(force_vec)
+            # force_mag = force_vec.norm().item()  # Compute the magnitude (Euclidean norm)
+            # TODO 返回3d vector of contact forces in world frame
+        return force_vector
 
-        print(contact_flags)  # Optional: for debugging
-        return tuple(contact_flags)  # Return a tuple of booleans: (thumb, middle, index)
+    # TODO: deprecated, needs to be updated with multiple fingers
+    def _force_frame(self, finger, contact_points, contact_force):
+        """
+        :param finger: which finger we want to get the force frame
+        :param contact_points: the contact points in the world frame
+        :param contact_force: a 3d vector in the world frame
+        :return n : the normal line of the force vector
+        :return f : the friction vector of the force vector
+        :return z : orthogonal vector to n and f
+        """
 
-    # def save_force_recordings_to_csv(self, file_path):
-#         import pandas as pd
-#         rows = []
-#         for step_idx, step_data in enumerate(self.force_recordings):
-#             for finger, data in step_data.items():
-#                 if finger == 'q':
-#                     continue
-#                 force = data['force']
-#                 torque = data['torque']
-#                 force = force.cpu().numpy()
-#                 torque = torque.cpu().numpy()
-#
-#                 row = {
-#                     'step': step_idx,
-#                     'finger': finger,
-#                     'fx': float(force[0]),
-#                     'fy': float(force[1]),
-#                     'fz': float(force[2]),
-#                     'tx': float(torque[0]),
-#                     'ty': float(torque[1]),
-#                     'tz': float(torque[2]),
-#                 }
-#                 rows.append(row)
-#
-#         df = pd.DataFrame(rows)
-#         df.to_csv(file_path, index=False)
+
+        return n, f, z
+
 
     def get_state(self):
         arm_q = {'arm_q': self._q[:, self.arm_index]}

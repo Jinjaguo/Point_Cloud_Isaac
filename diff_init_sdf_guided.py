@@ -394,8 +394,15 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
                 # print('q_tensor:', q_tensor.shape)
                 data = _preprocess_fingers(q_tensor, contact_scenes)
+
+
                 for finger in fingers:
                     g = data[finger]['sdf']
+                    # TODO 拿这个最近点，把力传感器放在这里，每次step要更新。 计算————拿数据————转换坐标————设置传感器————获得读数
+                    # TODO single_step 不需要拿这个力再解算了
+                    # 或者问问gpt有没有更好的方法？
+                    closest_pt_world = data[finger]['closest_pt_world']
+                    force_vector = env._force_signal(closest_pt_world)
                     print(f'{finger}_sdf is {g.item()}')
                     results_n2r.append({
                         'yaw': yaw_n2r,

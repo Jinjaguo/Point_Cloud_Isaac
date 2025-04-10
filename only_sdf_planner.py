@@ -58,6 +58,7 @@ def _preprocess_fingers(q_state, contact_scenes):
         grad_g_q = ret_scene.get('grad_sdf', None)
         data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, T, d)
         data[finger]['grad_env_sdf'] = ret_scene['grad_env_sdf'][:, i, :3]
+        data[finger]['closest_pt_world'] = ret_scene['closest_pt_world'][:, i]
 
     sdf = ret_scene.get('sdf', None)
     grad_g_theta = ret_scene.get('grad_env_sdf', None)
