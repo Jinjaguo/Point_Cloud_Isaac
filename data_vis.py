@@ -43,16 +43,30 @@ for label, data_dir in dirs.items():
             results[label][finger]["force_magnitude_mean"].append(force_mean)
             results[label][finger]["torque_magnitude_mean"].append(torque_mean)
 
+thumb_csvto, thumb_diff = [], []
+index_csvto, index_diff = [], []
+middle_csvto, middle_diff = [], []
 
-# 绘图
+result_arrays = {
+    "thumb": {"csvto": thumb_csvto, "diff": thumb_diff},
+    "index": {"csvto": index_csvto, "diff": index_diff},
+    "middle": {"csvto": middle_csvto, "diff": middle_diff}
+}
 for finger in finger_list:
-    # for metric in ["force_magnitude_mean", "torque_magnitude_mean"]:
     for metric in ["force_magnitude_mean"]:
         plt.figure(figsize=(8, 4))
-        for label in dirs:
+
+        for label in dirs:  # label in ["csvto", "diff"]
             y = results[label][finger][metric]
-            plt.plot(range(1, len(y) + 1), y, marker='o', label=label)
-        plt.xlabel("step (1-12)")
+            arr = np.array(y)
+
+            # 存到对应变量里
+            result_arrays[finger][label] = arr
+
+            # 画图
+            plt.plot(range(1, len(arr) + 1), arr, marker='o', label=label)
+
+        plt.xlabel("File Index (1-12)")
         plt.ylabel(f"{finger.capitalize()} {metric.replace('_', ' ').capitalize()}")
         plt.title(f"{finger.capitalize()} {metric.replace('_', ' ').capitalize()} Comparison")
         plt.grid(True)
@@ -60,6 +74,13 @@ for finger in finger_list:
         plt.tight_layout()
 
 plt.show()
+
+# 打印6个 numpy array
+print("=== Force Magnitude Arrays ===")
+for finger in finger_list:
+    for label in dirs:  # "csvto" and "diff"
+        arr = result_arrays[finger][label]
+        print(f"{finger}_{label}:\n{arr}\n")
 
 
 # compare 文件夹路径

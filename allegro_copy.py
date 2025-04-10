@@ -280,7 +280,7 @@ class AllegroEnv:
 
         for finger, body_idx in self.finger_ee_index.items():
             offset = offsets[finger]
-            sensor_pose = gymapi.Transform(offset)  # 可根据具体情况微调
+            sensor_pose = gymapi.Transform(offset)
             sensor_props = gymapi.ForceSensorProperties()
             sensor_props.enable_forward_dynamics_forces = True
             sensor_props.enable_constraint_solver_forces = True
