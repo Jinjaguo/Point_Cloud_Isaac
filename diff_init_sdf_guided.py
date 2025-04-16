@@ -378,6 +378,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 action = action[:, :4 * num_fingers]
                 action = action.to(device=env.device) + state.unsqueeze(0)[:, :4 * num_fingers].to(device=env.device)
 
+                env.pv_contact(contact_scenes)
                 env.step(action.to(device=env.device))
 
                 state = env.get_state()
@@ -394,16 +395,16 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
                 # print('q_tensor:', q_tensor.shape)
                 data = _preprocess_fingers(q_tensor, contact_scenes)
-
+                contact_points = []
 
                 for finger in fingers:
                     g = data[finger]['sdf']
-                    # TODO 拿这个最近点，把力传感器放在这里，每次step要更新。 计算————拿数据————转换坐标————设置传感器————获得读数
-                    # TODO single_step 不需要拿这个力再解算了
-                    # 或者问问gpt有没有更好的方法？
                     closest_pt_world = data[finger]['closest_pt_world']
-                    force_vector = env._force_signal(closest_pt_world)
-                    print(f'{finger}_sdf is {g.item()}')
+                    contact_points.append({
+                        'finger': finger,
+                        'contact_point': closest_pt_world.cpu().detach().numpy(),
+                    })
+                    # force_vector = env._force_signal(closest_pt_world)
                     results_n2r.append({
                         'yaw': yaw_n2r,
                         'finger': finger,
@@ -413,6 +414,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                         'thumb_force': thumb_force.detach().cpu().numpy(),  # 转换为numpy方便保存
                     })
                     # using gradient descent to satisfy the contact constraint
+                print('Contact points:', contact_points)
                 print('Solving contact constraint...')
 
                 # update the q_tensor with grad_g using contact constrain only
@@ -451,7 +453,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                            'contact_points': [], 'contact_distance': [], 'contact_state': []}
 
         sample_contact = params.get('sample_contact', False)
-        num_stages = 12
+        num_stages = 1
         if not sample_contact:
             # we only focus on the index, thumb_middle, and turn contacts which means turn mode
             contact_sequence = ['turn'] * num_stages
@@ -470,7 +472,6 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
         for stage in range(num_stages):
             print('\n get state before the stage begins ')
             state = env.get_state()
-            print(state)
             state = state['q'].reshape(-1)[:15].to(device=params['device'])
             ori = state[:15][-3:]
             _goal = torch.tensor([0, 0, state[-1]]).to(device=params['device'])

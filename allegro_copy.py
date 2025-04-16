@@ -2,6 +2,7 @@ import numpy as np
 import os
 import math
 
+# from examples.graphics import offset
 # from examples.graphics import handle
 from isaacgym import gymapi
 from isaacgym import gymutil
@@ -169,7 +170,6 @@ class AllegroEnv:
             cam_pos = gymapi.Vec3(camera_pos[0], camera_pos[1], camera_pos[2])
             cam_target = gymapi.Vec3(camera_target[0], camera_target[1], camera_target[2])
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
-            print(cam_pos, cam_target)
 
         asset_options = gymapi.AssetOptions()
         asset_options.fix_base_link = True
@@ -269,7 +269,7 @@ class AllegroEnv:
         self.finger_ee_index = {finger: self.gym.find_asset_rigid_body_index(allegro_asset, finger_to_ee_name[finger])
                                 for finger in self.fingers}
         self.num_dofs = num_dofs
-
+        self.attach_sensors_to_asset(allegro_asset)
 
         self._rb_states, self.rb_states = None, None
         self._actor_rb_states, self.actor_rb_states = None, None
@@ -349,6 +349,7 @@ class AllegroEnv:
                     dof_props = self.gym.get_actor_dof_properties(env, handle)
                     self.gym.set_actor_dof_properties(env, handle, dof_props)
                     self.handles[asset['name']].append(handle)
+
 
     def prepare_tensors(self):
         # prepare tensors for GPU usage -- must use tensor API from here on out
@@ -434,6 +435,7 @@ class AllegroEnv:
             self._step_sim()
         self._refresh_tensors()
 
+
     def set_pose(self, pose, semantic_order=True, zero_velocity=True):
         # semantic order: index, middle, ring, thumb. If the input is in this order, we have to swap the order
         # to match that in sim
@@ -507,19 +509,6 @@ class AllegroEnv:
         self.gym.refresh_mass_matrix_tensors(self.sim)
         self.gym.refresh_force_sensor_tensor(self.sim)
 
-    def single_step_q(self, actions):
-        des_q = actions.clone()
-        self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(des_q))
-        self._step_sim()
-        self._refresh_tensors()
-
-        # update viewer
-        if self.viewer is not None:
-            self.gym.step_graphics(self.sim)
-            self.gym.draw_viewer(self.viewer, self.sim, True)
-            self.gym.sync_frame_time(self.sim)
-
-
     def single_step(self, actions):
         des_q = None
         torques = None
@@ -585,14 +574,14 @@ class AllegroEnv:
         else:
             self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(des_q))
 
-        self._step_sim()
         self._refresh_tensors()
-        self.force_signal()
+        self._step_sim()
 
         # update viewer
         if self.viewer is not None:
             self.gym.simulate(self.sim)
             self.gym.sync_frame_time(self.sim)
+
 
     def step(self, actions, ignore_img=False):
 
@@ -619,81 +608,140 @@ class AllegroEnv:
         # J = self.chain.jacobian(self._q[:, :7].reshape(-1, 7))
         # print(self._q)
         # print(actions - self.get_state())
+
+
+        for _ in range(4):
+            self._step_sim()
+        self._refresh_tensors()
+
+        ### here we begin to optimize the contact force ###
+        ### high frequency ###
+        # === Contact points from planner ===
+        from only_sdf_planner import _preprocess_fingers
+        state = self.get_state()
+        q_state = state['q'][:16].reshape(-1).to(device='cuda:0')
+        q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device='cuda:0')
+        data = _preprocess_fingers(q_tensor, self.contact_scenes)
+        contact_points = {}
+        contact_normal = {}
+
+        for finger in ["index", "middle", "thumb"]:
+            contact_points[finger] = data[finger]['closest_pt_world'][0].cpu().numpy()
+            contact_normal[finger] = data[finger]['contact_normal'][0].cpu().numpy()
+
+        # print(contact_points)
+        signal_data = self._force_signal(contact_points)
+
+        contact_frame = self._force_frame(contact_normal, signal_data)
+        # print(contact_frame)
+        # data[finger]['force'] = signal_data[finger]['force']
+        # data[finger]['contact_frame'] = contact_frame[finger]['contact_frame']
+        # data[finger]['f_n'] = contact_frame[finger]['f_n']
+        # data[finger]['f_t'] = contact_frame[finger]['f_t']
+
         return self.get_state()
 
-    def _force_signal(self, contact_points):
-        """
-        :param contact_points: 3d coordinates of contact points in the world frame
-        :return: 3d vector of contact forces in world frame
-        """
-
-        # TODO 拿到点后的坐标系的转化
+    def attach_sensors_to_asset(self, allegro_asset):
         self.force_sensor_indices = {}
-
-        offsets = {
-            'index': gymapi.Vec3(0.0, 0.0, 0.03),
-            'middle': gymapi.Vec3(0.0, 0.0, 0.03),
-            'thumb': gymapi.Vec3(0.0, -0.015, 0.025),
-        }
+        self.force_sensor_handles = {}
 
         for finger, body_idx in self.finger_ee_index.items():
-            offset = offsets[finger]
-            sensor_pose = gymapi.Transform(offset)
+            sensor_pose = gymapi.Transform()
             sensor_props = gymapi.ForceSensorProperties()
             sensor_props.enable_forward_dynamics_forces = True
             sensor_props.enable_constraint_solver_forces = True
             sensor_props.use_world_frame = True
             sensor_idx = self.gym.create_asset_force_sensor(allegro_asset, body_idx, sensor_pose, sensor_props)
             self.force_sensor_indices[finger] = sensor_idx
+        print('___sensors attached to asset___')
 
-        step_force_data = {}
+    def pv_contact(self, contact_scenes):
+        self.contact_scenes = contact_scenes
 
+
+    def _force_signal(self, contact_points):
+        """
+        :param contact_points: 3d coordinates of contact points in the world frame(order is index, middle, thumb)
+        :return: dict of estimated force vector at contact point for each finger
+        """
         # Refresh the force sensor data from the simulator
         self.gym.refresh_force_sensor_tensor(self.sim)
         sensor_tensor = gymtorch.wrap_tensor(self.gym.acquire_force_sensor_tensor(self.sim))
+        fingers = ["index", "middle", "thumb"]
+        signal_data = {}
 
-        # Collect force and torque data for each finger
-        for finger, sensor_idx in self.force_sensor_indices.items():
-            force = sensor_tensor[sensor_idx, 0:3]  # Extract force vector (fx, fy, fz)
-            torque = sensor_tensor[sensor_idx, 3:6]  # Extract torque vector (tx, ty, tz)
-            step_force_data[finger] = {
-                "force": force,
-                "torque": torque
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        num_bodies = self.gym.get_env_rigid_body_count(self.envs[0])
+        env_id = 0
+
+        for finger in fingers:
+            idx = self.force_sensor_indices[finger]
+            sensor_force = sensor_tensor[idx, 0:3].cpu().numpy()
+            sensor_torque = sensor_tensor[idx, 3:6].cpu().numpy()
+
+            contact_pt = contact_points[finger]  # (3,)
+            link_index = self.finger_ee_index[finger]
+            global_rb_idx = env_id * num_bodies + link_index
+            rb_state = self.rb_states[global_rb_idx]
+            sensor_pos_world = rb_state[0:3].cpu().numpy()
+
+            r = contact_pt - sensor_pos_world
+            norm_r = np.linalg.norm(r)
+            if norm_r < 1e-6:
+                print(f"[WARN] {finger}: contact too close to sensor origin, skipping force projection")
+                F_perpendicular = np.zeros(3)
+            else:
+                r_hat = r / norm_r
+                F_perpendicular = np.cross(r_hat, sensor_torque) / (norm_r ** 2)
+
+            signal_data[finger] = {
+                'force': F_perpendicular,
+                'sensor_force': sensor_force,
+                'torque': sensor_torque,
+                'r': r,
+                'contact_point': contact_pt,
+                'sensor_position': sensor_pos_world,
             }
 
-        # Record the force and torque data of this timestep
-        self.force_recordings.append(step_force_data)
-
-        # Thresholds for contact detection (from prior observation of minimum contact force)
-        contact_thresholds = {
-            "thumb": 0.325462,
-            "middle": 0.358472,
-            "index": 0.363329
-        }
-
-        # Check whether each finger is in contact (force magnitude >= threshold)
-        force_vector = []
-        for finger in ["thumb", "middle", "index"]:
-            force_vec = step_force_data[finger]["force"]
-            force_vector.append(force_vec)
-            # force_mag = force_vec.norm().item()  # Compute the magnitude (Euclidean norm)
-            # TODO 返回3d vector of contact forces in world frame
-        return force_vector
+        return signal_data
 
     # TODO: deprecated, needs to be updated with multiple fingers
-    def _force_frame(self, finger, contact_points, contact_force):
+    def _force_frame(self, contact_normal, contact_force):
         """
-        :param finger: which finger we want to get the force frame
-        :param contact_points: the contact points in the world frame
+        :param contact_normal: Contact point unit normal vectors in the world frame
         :param contact_force: a 3d vector in the world frame
         :return n : the normal line of the force vector
         :return f : the friction vector of the force vector
         :return z : orthogonal vector to n and f
         """
+        eps = 1e-8 # small value to avoid division by zero
+        fingers = ["index", "middle", "thumb"]
+        frame_data = {}
 
+        for finger in fingers:
+            n = contact_normal[finger] / (np.linalg.norm(contact_normal[finger]) + eps)
+            f = contact_force[finger]['force']
 
-        return n, f, z
+            f_n = np.dot(f, n) * n
+            f_t = f - f_n
 
+            z_c = n
+            x_c = f_t / (np.linalg.norm(f_t) + eps) if np.linalg.norm(f_t) > eps else np.array([1.0, 0.0, 0.0])
+            y_c = np.cross(z_c, x_c)
+            y_c = y_c / (np.linalg.norm(y_c) + eps)
+            x_c = np.cross(y_c, z_c)
+
+            contact_frame = np.stack([x_c, y_c, z_c], axis=1)
+            frame_data[finger] = {
+                'f_n': f_n,
+                'f_t': f_t,
+                'contact_frame': contact_frame,
+                'norm_fn': np.linalg.norm(f_n),
+                'norm_ft': np.linalg.norm(f_t),
+                'force_proj_local': contact_frame.T @ f
+            }
+
+        return frame_data
 
     def get_state(self):
         arm_q = {'arm_q': self._q[:, self.arm_index]}

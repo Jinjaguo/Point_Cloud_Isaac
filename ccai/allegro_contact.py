@@ -363,11 +363,6 @@ class AllegroObjectProblem(ConstrainedSVGDProblem):
             # reshape and throw away data for unused fingers
             grad_g_q = ret_scene.get('grad_sdf', None)
             self.data[finger]['grad_sdf'] = grad_g_q[:, i].reshape(N, self.T + 1, 16)
-            # TODO: check if this is correct，ask！！！
-            # why the grad_g_q of thumb is related to the joints of object？
-            # if finger == 'thumb':
-            #     print('^^^^^^^^^^^^^^^^^^^^^^^^^^^')
-            #     print(f"Batch 0, Time step 0, grad_sdf: {self.data[finger]['grad_sdf'][0, 0]}")
 
             # contact jacobian
             contact_jacobian = ret_scene.get('contact_jacobian', None)
