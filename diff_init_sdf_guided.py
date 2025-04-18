@@ -380,31 +380,20 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 env.pv_contact(contact_scenes)
                 env.step(action.to(device=env.device))
-
                 state = env.get_state()
                 state = state['q'].reshape(-1).to(device=params['device'])
                 ori = state[:15][-1]
                 print('--->>>> ori after step:', ori)
 
-                # make sure contact constraint is satisfied
-                # 16 = 4*3(finger number) + 4(roll pitch yaw and 1 screwdriver-cap joint)
-                from getContactData import finger_wrapper, _preprocess_fingers
+                from getContactData import _preprocess_fingers
                 state = env.get_state()
                 q_state = state['q'][:16].reshape(-1).to(device=params['device'])
                 yaw_n2r = q_state[-2].item()
                 q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device=params['device'])
-                # print('q_tensor:', q_tensor.shape)
                 data = _preprocess_fingers(q_tensor, contact_scenes)
-                contact_points = []
 
                 for finger in fingers:
                     g = data[finger]['sdf']
-                    closest_pt_world = data[finger]['closest_pt_world']
-                    contact_points.append({
-                        'finger': finger,
-                        'contact_point': closest_pt_world.cpu().detach().numpy(),
-                    })
-                    # force_vector = env._force_signal(closest_pt_world)
                     results_n2r.append({
                         'yaw': yaw_n2r,
                         'finger': finger,
@@ -413,36 +402,9 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                         'middle_force': middle_force.detach().cpu().numpy(),
                         'thumb_force': thumb_force.detach().cpu().numpy(),  # 转换为numpy方便保存
                     })
-                    # using gradient descent to satisfy the contact constraint
-                print('Contact points:', contact_points)
-                print('Solving contact constraint...')
-
-                # update the q_tensor with grad_g using contact constrain only
-                # q_tensor = update(q_tensor, contact_scenes)
-                q_tensor = update(q_tensor, contact_scenes)
-                # data = _preprocess_fingers(q_tensor, contact_scenes)
-                # for finger in fingers:
-                #     g = data[finger]['sdf']
-                #     print(f'{finger}_sdf is {g.item()}')
-                # new_state = env.get_state()
-                # action = q_tensor.detach().clone()[..., :4 * num_fingers]
-                # action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
-                print('force the finger to be in contact with the object')
-                action = finger_wrapper(q_tensor)
-                env.single_step(action.to(device=env.device))
-
-                # record the sdf of each fingers in gym env
-                state_n2r = env.get_state()
-                q_state_n2r = state_n2r['q'][:16].reshape(1, 1, 16).to(device=params['device'])
-                yaw_n2r = q_state_n2r[:, :, -2].item()
-                print('--->>>> ori after constraint:', yaw_n2r)
-                # update yaw_n2r in results_n2r
-                for item in results_n2r[-3:]:  # only update the last three items
-                    item['yaw'] = yaw_n2r
 
             import pandas as pd
             df = pd.DataFrame(results_n2r)
-
             actual_trajectory = torch.stack(actual_trajectory, dim=0).to(device=params['device'])
 
             return actual_trajectory, planned_trajectories, initial_samples, sim_rollouts, optimizer_paths, contact_points, contact_distance, df

@@ -378,11 +378,12 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 action = action[:, :4 * num_fingers]
                 action = action.to(device=env.device) + state.unsqueeze(0)[:, :4 * num_fingers].to(device=env.device)
 
+                env.pv_contact(contact_scenes)
                 env.step(action.to(device=env.device))
                 state = env.get_state()
                 state_1 = state['q'].reshape(-1).to(device=params['device'])
                 ori = state_1[:15][-3:]
-                print('ori after step:', ori)
+                print('--->>>>ori after step:', ori)
 
                 # record the sdf of each fingers in gym env
                 q_state_n2r = state['q'][:16].reshape(1, 1, 16).to(device=params['device'])

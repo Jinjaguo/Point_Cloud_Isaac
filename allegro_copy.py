@@ -580,6 +580,8 @@ class AllegroEnv:
         # update viewer
         if self.viewer is not None:
             self.gym.simulate(self.sim)
+            self.gym.step_graphics(self.sim)
+            self.gym.draw_viewer(self.viewer, self.sim, False)
             self.gym.sync_frame_time(self.sim)
 
 
@@ -608,9 +610,7 @@ class AllegroEnv:
         # print(self._q)
         # print(actions - self.get_state())
 
-
-        for _ in range(4):
-            self._step_sim()
+        self._step_sim()
         self._refresh_tensors()
 
         ### here we begin to optimize the contact force ###
@@ -629,15 +629,20 @@ class AllegroEnv:
             contact_points[finger] = data[finger]['closest_pt_world'][0].cpu().numpy()
             contact_normal[finger] = data[finger]['contact_normal'][0].cpu().numpy()
 
-        # print(contact_points)
         signal_data = self._force_signal(contact_points)
         contact_frame = self._force_frame(contact_normal, signal_data)
+        measured_fn = sum(contact_frame[f]['norm_fn'] for f in ["index", "middle", "thumb"])
+        fn_list = [contact_frame[f]['norm_fn'] for f in ["index", "middle", "thumb"]]
+        n_f_vec = np.array(fn_list).reshape(-1, 1)
+        # print(measured_fn)
+
         object_cloud = self.obsverved_pcd
         # === Linear Programming ===
         result = run_linear_program(
             object_cloud,
             contact_points,
-            contact_frame
+            contact_frame,
+            n_f_vec
         )
         check_result(result)
 
@@ -720,7 +725,8 @@ class AllegroEnv:
             n = contact_normal[finger] / (np.linalg.norm(contact_normal[finger]) + eps)
             f = contact_force[finger]['force']
             # make sure the normal vector is in the contact normal direction
-            n = -n if np.dot(n, f) < 0 else n
+            if np.dot(f, n) < 0:
+                n = -n
 
             f_n = np.dot(f, n) * n
             f_t = f - f_n

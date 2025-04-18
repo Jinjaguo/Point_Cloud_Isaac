@@ -19,18 +19,21 @@ def skew(v):
 
 def build_grasp_matrix(contact_points, p_com):
     """
-    contact_points: dict {finger: (3,)}
-    返回 G ∈ ℝ^{6 × 3n}
+    返回 G ∈ ℝ^{3 × 3n}，只管 x、y 平移和 z 轴转动
     """
     G_blocks = []
     for finger in ['index', 'middle', 'thumb']:
-        r = contact_points[finger] - p_com           # (3,)
-        G_i = np.vstack([np.eye(3), skew(r)])        # (6,3)
+        r = contact_points[finger] - p_com        # (3,)
+        # 平面力 [fx, fy] & 转矩 τz = r × f · z
+        G_i = np.vstack([
+            np.eye(2, 3),                         # 2×3 取 fx, fy
+            skew(r)[2, :].reshape(1, 3)           # 1×3 取 (r×)z
+        ])                                        # 3×3
         G_blocks.append(G_i)
-    return np.hstack(G_blocks)                       # (6, 9)
+    return np.hstack(G_blocks)
 
 
-def build_friction_cone_frame_basis(contact_frame, mu=0.3, k=4):
+def build_friction_cone_rows(contact_frame, mu=0.3, k=4):
     """
     Build primitive friction directions in local frame (z is normal)
     :param contact_frame: 3x3 rotation matrix (columns = x, y, z)
@@ -38,41 +41,19 @@ def build_friction_cone_frame_basis(contact_frame, mu=0.3, k=4):
     :param k: number of tangential directions (excluding normal)
     :return: F_i ∈ ℝ^{3×(k+1)} in world frame
     """
-    local_dirs = []
-
-    # Add normal direction (unit z)
-    normal_local = np.array([0, 0, 1])
-    local_dirs.append(normal_local)
-
-    # Tangential directions in local xy-plane
-    angles = np.linspace(0, 2 * np.pi, k, endpoint=False)
-    for theta in angles:
-        t_local = np.array([np.cos(theta), np.sin(theta), mu])
-        t_local = t_local / np.linalg.norm(t_local)  # normalize
-        local_dirs.append(t_local)
-
-    # Transform to world frame
-    F_i = contact_frame @ np.stack(local_dirs, axis=1)
-    return F_i
+    dirs = [[0, 0, 1]]
+    for theta in np.linspace(0, 2 * np.pi, k, endpoint=False):
+        dirs.append([mu * np.cos(theta), mu * np.sin(theta), 1])
+    Fi = np.asarray(dirs)  # (k+1)×3  在接触局部系
+    return Fi @ contact_frame.T
 
 
-def build_full_F(contact_frames, mu=0.5, k=4):
-    """
-    contact_frames: dict from finger → contact_frame (3x3)
-    returns F ∈ ℝ^{3n × n(k+1)} (block-diagonal)
-    """
+
+def build_full_F(contact_frames, mu=0.3, k=4):
     fingers = ["index", "middle", "thumb"]
-    blocks = []
-
-    for finger in fingers:
-        F_i = build_friction_cone_frame_basis(contact_frames[finger], mu=mu, k=k)
-        blocks.append(F_i)
-
-    blocks = [F_i.T for F_i in blocks]
-    # F_i: 原来形状是 (3 × (k+1))，列向量是各摩擦面元方向
-    # F_i.T: 变成 ((k+1) × 3)，行向量是各面元方向，方便写 F_i.T @ f_i ≥ η
-    F = scipy.linalg.block_diag(*blocks)  # shape (3n, (k+1)n)
-    return F
+    F_blocks = [build_friction_cone_rows(contact_frames[f], mu, k)
+                for f in fingers]
+    return scipy.linalg.block_diag(*F_blocks)   # ((k+1)n, 3n)
 
 def build_e_vector(normals):
     """
@@ -87,13 +68,14 @@ def build_e_vector(normals):
 
 
 class LinearProgram:
-    def __init__(self, G, F, e, n_f):
-        self.G = G                  # (6 x 3n) grasp matrix
-        self.F = F                  # (3n x 3n) block-diagonal friction cone matrix
+    def __init__(self, G, F, e, n_f_vec):
+        self.G = G                  # (3 x 3n) grasp matrix
+        self.F = F                  # ((k+1)n x 3n) block-diagonal friction cone matrix
         self.e = e                  # (3n x 1) normal force selection vector
-        self.n_f = n_f              # scalar upper bound on normal force
         self.n_c = G.shape[1] // 3  # number of contact points
-        assert G.shape == (6, 3 * self.n_c)
+        self.n_f_vec = cp.Constant(n_f_vec.reshape(-1, 1))  # 每指上限 (n_c,1)
+
+        assert G.shape == (3, 3 * self.n_c)
         assert e.shape == (3 * self.n_c, 1)
 
         # variables
@@ -110,16 +92,19 @@ class LinearProgram:
     def positive_constraint(self):
         return self.eta >= 0
 
-    def normal_force_constraint(self):
-        return self.e.T @ self.lambda_ == self.n_f
 
     def solve(self):
         constraints = [
             self.static_equilibrium(),
             self.friction_cone(),
             self.positive_constraint(),
-            self.normal_force_constraint()
         ]
+        fz = self.lambda_[2::3]  # 取每 3 个里的第 3 个分量
+        constraints += [
+            fz >= 0,  # 压力向内
+            fz <= self.n_f_vec  # 每指上限 (cp.Constant or np.array shape (n_c,1))
+        ]
+
         objective = cp.Maximize(self.eta)
         problem = cp.Problem(objective, constraints)
         problem.solve(solver=cp.CLARABEL)
@@ -131,18 +116,18 @@ class LinearProgram:
         }
 
 
-def run_linear_program(object_cloud, contact_pts_world, frame_data):
+def run_linear_program(object_cloud, contact_pts_world, frame_data, n_f_vec):
     p_com = get_reference_point(object_cloud)
     G = build_grasp_matrix(contact_pts_world, p_com)
 
     contact_frames = {f: frame_data[f]['contact_frame'] for f in frame_data}
-    F = build_full_F(contact_frames, mu=0.5, k=4)
+    F = build_full_F(contact_frames)
 
     normals = {f: frame_data[f]['contact_frame'][:, 2] for f in frame_data}
     e = build_e_vector(list(normals.values()))
-    n_f = 1.0
 
-    lp = LinearProgram(G, F, e, n_f)
+
+    lp = LinearProgram(G, F, e, n_f_vec)
     result = lp.solve()
     print(result['status'], result['optimal_eta'])
 
