@@ -28,6 +28,7 @@ from scipy.spatial.transform import Rotation as R
 import random
 import pandas as pd
 from linearProblemContact import *
+from dsAttractor import *
 
 
 def quat_change_convention(q, current='xyzw'):
@@ -512,12 +513,12 @@ class AllegroEnv:
     def single_step(self, actions):
         des_q = None
         torques = None
+
         if self.control_mode == 'cartesian_impedance':
             target_position = actions[:, :3]
             target_orientation = actions[:, 3:]
-            # torques = self._cartesian_impedance_controller(target_position,
-            #                                                target_orientation,
-            #                                                self._q[:, :7].squeeze(-1).clone())
+
+
         elif self.control_mode == 'joint_torque':
             torques = actions
 
@@ -526,7 +527,7 @@ class AllegroEnv:
                 m = self.chain.forward_kinematics(actions)
                 target_position, target_orientation = m[:, :3, 3], pk.matrix_to_quaternion(m[:, :3, :3])
                 target_orientation = quat_change_convention(target_orientation, 'wxyz')
-                # torques = self._cartesian_impedance_controller(target_position, target_orientation, actions)
+
             else:
                 des_q = self.default_dof_pos[:, :(self.arm_dof + 16)].clone().float()
                 tmp = des_q.clone()[:, (4 + self.arm_dof):(8 + self.arm_dof)]
@@ -538,22 +539,24 @@ class AllegroEnv:
                 # add palm movement
                 des_q[:, :self.arm_dof] = actions[:, :self.arm_dof]
                 des_q = torch.cat((des_q, self._q[:, (16 + self.arm_dof):]), dim=-1)
-                if self.contact_controller:
-                    # TODO hardcoded for now
-                    sin_valve = torch.sin(self._q[:, -1] + np.pi / 2)
-                    cos_valve = torch.cos(self._q[:, -1] + np.pi / 2)
-                    thumb_normal_vector = -torch.stack(
-                        (sin_valve, torch.zeros_like(sin_valve), cos_valve), dim=-1)
-                    index_normal_vector = thumb_normal_vector
 
-                    normal_vectors = torch.stack((thumb_normal_vector, index_normal_vector), dim=1)
 
-                    new_torque = self._contact_controller(des_q - self._q, normal_vectors)
-
-                    print('old des q', des_q)
-
-                    des_q[:, :16] = self._q[:, :16] + new_torque / self.joint_stiffness
-                    print('new des q', des_q)
+                # if self.contact_controller:
+                #     # TODO hardcoded for now
+                #     sin_valve = torch.sin(self._q[:, -1] + np.pi / 2)
+                #     cos_valve = torch.cos(self._q[:, -1] + np.pi / 2)
+                #     thumb_normal_vector = -torch.stack(
+                #         (sin_valve, torch.zeros_like(sin_valve), cos_valve), dim=-1)
+                #     index_normal_vector = thumb_normal_vector
+                #
+                #     normal_vectors = torch.stack((thumb_normal_vector, index_normal_vector), dim=1)
+                #
+                #     new_torque = self._contact_controller(des_q - self._q, normal_vectors)
+                #
+                #     print('old des q', des_q)
+                #
+                #     des_q[:, :16] = self._q[:, :16] + new_torque / self.joint_stiffness
+                #     print('new des q', des_q)
 
         # elif self.control_mode == 'joint_torque_position':
         #     "it takes in the desired torque and transform it into position control"
@@ -586,6 +589,61 @@ class AllegroEnv:
 
 
     def step(self, actions, ignore_img=False):
+        ### here we begin to optimize the contact force ###
+        ### high frequency ###
+
+        # === Contact points from planner ===
+        from getContactData import _preprocess_fingers
+        # contact_points = self.contact_scenes['contact_points']
+        state = self.get_state()
+        q_state = state['q'][:16].reshape(-1).to(device='cuda:0')
+        q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device='cuda:0')
+        data = _preprocess_fingers(q_tensor, self.contact_scenes)
+        contact_points = {}
+        contact_normal = {}
+
+        for finger in ["index", "middle", "thumb"]:
+            contact_points[finger] = data[finger]['closest_pt_world'][0].cpu().numpy()
+            contact_normal[finger] = data[finger]['contact_normal'][0].cpu().numpy()
+
+        signal_data = self._force_signal(contact_points)
+        contact_frame = self._force_frame(contact_normal, signal_data)
+        fn_list = [contact_frame[f]['norm_fn'] for f in ["index", "middle", "thumb"]]
+        n_f_vec = np.array(fn_list).reshape(-1, 1)
+
+        object_cloud = self.obsverved_pcd
+
+        # === Linear Programming ===
+        result = run_linear_program(
+            object_cloud,
+            contact_points,
+            contact_frame,
+            n_f_vec
+        )
+        check_result(result)
+
+        # === Update Attractor ===
+        ds = DSAttractor(result, contact_points)
+        x2_dict = ds.get_grasp_attractor(object_cloud)
+        eta = result['optimal_eta']
+
+        eta_thr_low = 0.005
+        eta_thr_high = 0.05
+        # === Update Grasp ===
+        if eta < eta_thr_low:
+            alpha = 1.0
+            print(f"Strong re‑grasp, η={eta:.4f} < {eta_thr_low}")
+            self.apply_finger_attractors(x2_dict, contact_points, alpha)
+
+        elif eta < eta_thr_high:
+            alpha = 0.3
+            print(f"Light re‑grasp, η={eta:.4f} in [{eta_thr_low}, {eta_thr_high}]")
+            self.apply_finger_attractors(x2_dict, contact_points, alpha)
+
+        else:
+            print(f"Skip re‑grasp, η={eta:.4f} ≥ {eta_thr_high}")
+
+
         if self.gradual_control:
             state = self.get_state()
             robot_q = state['q'][:, :self.robot_dof]
@@ -613,40 +671,81 @@ class AllegroEnv:
         self._step_sim()
         self._refresh_tensors()
 
-        ### here we begin to optimize the contact force ###
-        ### high frequency ###
-        # === Contact points from planner ===
-        from getContactData import _preprocess_fingers
-        # contact_points = self.contact_scenes['contact_points']
-        state = self.get_state()
-        q_state = state['q'][:16].reshape(-1).to(device='cuda:0')
-        q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device='cuda:0')
-        data = _preprocess_fingers(q_tensor, self.contact_scenes)
-        contact_points = {}
-        contact_normal = {}
-
-        for finger in ["index", "middle", "thumb"]:
-            contact_points[finger] = data[finger]['closest_pt_world'][0].cpu().numpy()
-            contact_normal[finger] = data[finger]['contact_normal'][0].cpu().numpy()
-
-        signal_data = self._force_signal(contact_points)
-        contact_frame = self._force_frame(contact_normal, signal_data)
-        measured_fn = sum(contact_frame[f]['norm_fn'] for f in ["index", "middle", "thumb"])
-        fn_list = [contact_frame[f]['norm_fn'] for f in ["index", "middle", "thumb"]]
-        n_f_vec = np.array(fn_list).reshape(-1, 1)
-        # print(measured_fn)
-
-        object_cloud = self.obsverved_pcd
-        # === Linear Programming ===
-        result = run_linear_program(
-            object_cloud,
-            contact_points,
-            contact_frame,
-            n_f_vec
-        )
-        check_result(result)
 
         return self.get_state()
+
+
+    def apply_finger_attractors(self,
+                                x2_dict: dict,
+                                contact_points: dict,
+                                alpha: float = 0.5):
+        """
+        将 λ→Δx 投影得到的吸引子 x2_dict 写入关节目标（位置控制）。
+        ----------
+        x2_dict        : {'index': np.ndarray(3,), 'middle':…, 'thumb':…}
+        contact_points : 当前接触点 finger→3D 坐标
+        alpha          : 融合系数, 0=不更新, 1=全量更新
+        """
+        assert 0.0 <= alpha <= 1.0, "alpha 应在 [0,1] 内"
+
+        # ---------- 0. 读取完整当前关节 ----------
+        q0_full = self._q.clone()  # shape (1, DOF)
+
+        # 预留一个增量向量，稍后累加
+        dq_full = torch.zeros_like(q0_full)
+
+        # ---------- 1. 每根手指计算 dq ----------
+        for finger in ["index", "middle", "thumb"]:
+            idx = self.finger_to_joint_index[finger]  # 4 idx
+            q_finger = q0_full[:, idx]  # (1,4)
+
+            x1 = torch.tensor(contact_points[finger],
+                              dtype=q0_full.dtype,
+                              device=q0_full.device)
+            x2 = torch.tensor(x2_dict[finger],
+                              dtype=q0_full.dtype,
+                              device=q0_full.device)
+            dx = (x2 - x1).unsqueeze(-1)  # (3,1)
+
+            # 若位移极小则跳过
+            if torch.norm(dx) < 1e-6:
+                continue
+
+            q_chain = q0_full[:, :16]  # (1,16)
+            # 1.1 雅可比 (1,6,dof)
+            J_full = self.chain.jacobian(
+                q_chain,  # 只传 16 DOF
+                locations=x1,  # 接触点
+                link_indices=[self.finger_ee_index[finger]],  # 指尖 link
+                analytic=False,  # 取几何雅可比
+                locations_in_ee_frame=True  # x1 在 ee frame 吗?
+            )[0, :3, :]  # 取平移部分 (3,dof)
+
+            # 1.2 伪逆求 dq 全长向量
+            J_pinv = torch.pinverse(J_full)  # (dof,3)
+            dq = (J_pinv @ dx).view(1, -1)  # (1,dof)
+
+            # 1.3 累加到全局 dq 向量
+            dq_full[:, :16] = dq
+
+        # ---------- 2. α 融合 & 更新 ----------
+        des_q_full = q0_full + alpha * dq_full
+
+        # 发送到 simulator
+        self.gym.set_dof_position_target_tensor(
+            self.sim,
+            gymtorch.unwrap_tensor(des_q_full)
+        )
+
+        # ---------- 3. 物理‑可视化同步 ----------
+        self._step_sim()
+        self._refresh_tensors()
+
+        if self.viewer is not None:
+            self.gym.fetch_results(self.sim, True)
+            self.gym.step_graphics(self.sim)
+            self.gym.draw_viewer(self.viewer, self.sim, False)
+            self.gym.sync_frame_time(self.sim)
 
     def attach_sensors_to_asset(self, allegro_asset):
         self.force_sensor_indices = {}
@@ -665,6 +764,8 @@ class AllegroEnv:
     def pv_contact(self, contact_scenes):
         self.contact_scenes = contact_scenes
 
+    def pk_chain(self, chain):
+        self.chain = chain
 
     def _force_signal(self, contact_points):
         """

@@ -68,12 +68,13 @@ def build_e_vector(normals):
 
 
 class LinearProgram:
-    def __init__(self, G, F, e, n_f_vec):
+    def __init__(self, G, F, e, n_f_vec, eta_max=None):
         self.G = G                  # (3 x 3n) grasp matrix
         self.F = F                  # ((k+1)n x 3n) block-diagonal friction cone matrix
         self.e = e                  # (3n x 1) normal force selection vector
         self.n_c = G.shape[1] // 3  # number of contact points
         self.n_f_vec = cp.Constant(n_f_vec.reshape(-1, 1))  # 每指上限 (n_c,1)
+        self.eta_max = eta_max
 
         assert G.shape == (3, 3 * self.n_c)
         assert e.shape == (3 * self.n_c, 1)
@@ -105,6 +106,9 @@ class LinearProgram:
             fz <= self.n_f_vec  # 每指上限 (cp.Constant or np.array shape (n_c,1))
         ]
 
+        if self.eta_max is not None:
+            constraints.append(self.eta <= self.eta_max)
+
         objective = cp.Maximize(self.eta)
         problem = cp.Problem(objective, constraints)
         problem.solve(solver=cp.CLARABEL)
@@ -116,7 +120,7 @@ class LinearProgram:
         }
 
 
-def run_linear_program(object_cloud, contact_pts_world, frame_data, n_f_vec):
+def run_linear_program(object_cloud, contact_pts_world, frame_data, n_f_vec, eta_max=0.1):
     p_com = get_reference_point(object_cloud)
     G = build_grasp_matrix(contact_pts_world, p_com)
 
@@ -127,7 +131,7 @@ def run_linear_program(object_cloud, contact_pts_world, frame_data, n_f_vec):
     e = build_e_vector(list(normals.values()))
 
 
-    lp = LinearProgram(G, F, e, n_f_vec)
+    lp = LinearProgram(G, F, e, n_f_vec, eta_max=eta_max)
     result = lp.solve()
     print(result['status'], result['optimal_eta'])
 

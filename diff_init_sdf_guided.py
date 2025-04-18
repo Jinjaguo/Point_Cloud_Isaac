@@ -502,6 +502,8 @@ if __name__ == "__main__":
     config['obj_dof'] = 3
     chain = pk.build_chain_from_urdf(open(asset).read())
     chain = chain.to(device=device)
+    env.pk_chain(chain)
+
     robot_sdf = pv.RobotSDF(chain, path_prefix=get_assets_dir() + '/xela_models',
                             use_collision_geometry=False)
 
