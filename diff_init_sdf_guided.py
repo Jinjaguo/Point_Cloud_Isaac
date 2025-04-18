@@ -388,7 +388,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
 
                 # make sure contact constraint is satisfied
                 # 16 = 4*3(finger number) + 4(roll pitch yaw and 1 screwdriver-cap joint)
-                from only_sdf_planner import finger_wrapper, update, _preprocess_fingers
+                from getContactData import finger_wrapper, _preprocess_fingers
                 state = env.get_state()
                 q_state = state['q'][:16].reshape(-1).to(device=params['device'])
                 yaw_n2r = q_state[-2].item()
@@ -429,7 +429,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 # action = action.reshape(-1, 4 * num_fingers).to(device=env.device)
                 print('force the finger to be in contact with the object')
                 action = finger_wrapper(q_tensor)
-                env.single_step_q(action.to(device=env.device))
+                env.single_step(action.to(device=env.device))
 
                 # record the sdf of each fingers in gym env
                 state_n2r = env.get_state()

@@ -1,4 +1,3 @@
-import torch
 from ccai.utils.allegro_utils import *
 
 FINGER_TO_IDX = {

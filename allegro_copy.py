@@ -20,7 +20,6 @@ import pytorch_kinematics as pk
 import pytorch_kinematics.transforms as tf
 
 # import pytorch3d.transforms as torch3d_tf
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 import osqp
 from scipy import sparse
@@ -28,6 +27,7 @@ from scipy.spatial.transform import Rotation as R
 
 import random
 import pandas as pd
+from linearProblemContact import *
 
 
 def quat_change_convention(q, current='xyzw'):
@@ -584,7 +584,6 @@ class AllegroEnv:
 
 
     def step(self, actions, ignore_img=False):
-
         if self.gradual_control:
             state = self.get_state()
             robot_q = state['q'][:, :self.robot_dof]
@@ -617,7 +616,8 @@ class AllegroEnv:
         ### here we begin to optimize the contact force ###
         ### high frequency ###
         # === Contact points from planner ===
-        from only_sdf_planner import _preprocess_fingers
+        from getContactData import _preprocess_fingers
+        # contact_points = self.contact_scenes['contact_points']
         state = self.get_state()
         q_state = state['q'][:16].reshape(-1).to(device='cuda:0')
         q_tensor = q_state.reshape(1, 1, 16).clone().detach().to(device='cuda:0')
@@ -631,13 +631,15 @@ class AllegroEnv:
 
         # print(contact_points)
         signal_data = self._force_signal(contact_points)
-
         contact_frame = self._force_frame(contact_normal, signal_data)
-        # print(contact_frame)
-        # data[finger]['force'] = signal_data[finger]['force']
-        # data[finger]['contact_frame'] = contact_frame[finger]['contact_frame']
-        # data[finger]['f_n'] = contact_frame[finger]['f_n']
-        # data[finger]['f_t'] = contact_frame[finger]['f_t']
+        object_cloud = self.obsverved_pcd
+        # === Linear Programming ===
+        result = run_linear_program(
+            object_cloud,
+            contact_points,
+            contact_frame
+        )
+        check_result(result)
 
         return self.get_state()
 
@@ -691,28 +693,24 @@ class AllegroEnv:
                 print(f"[WARN] {finger}: contact too close to sensor origin, skipping force projection")
                 F_perpendicular = np.zeros(3)
             else:
-                r_hat = r / norm_r
-                F_perpendicular = np.cross(r_hat, sensor_torque) / (norm_r ** 2)
+                F_perpendicular = np.cross(r, sensor_torque) / (norm_r ** 2)
 
             signal_data[finger] = {
-                'force': F_perpendicular,
-                'sensor_force': sensor_force,
-                'torque': sensor_torque,
+                'force': F_perpendicular, # world frame estimated values
+                'sensor_force': sensor_force, # world frame true values
+                'torque': sensor_torque, # world frame true values
                 'r': r,
-                'contact_point': contact_pt,
-                'sensor_position': sensor_pos_world,
+                'contact_point': contact_pt, # world frame
+                'sensor_position': sensor_pos_world, # world frame
             }
 
         return signal_data
 
-    # TODO: deprecated, needs to be updated with multiple fingers
+
     def _force_frame(self, contact_normal, contact_force):
         """
         :param contact_normal: Contact point unit normal vectors in the world frame
         :param contact_force: a 3d vector in the world frame
-        :return n : the normal line of the force vector
-        :return f : the friction vector of the force vector
-        :return z : orthogonal vector to n and f
         """
         eps = 1e-8 # small value to avoid division by zero
         fingers = ["index", "middle", "thumb"]
@@ -721,6 +719,8 @@ class AllegroEnv:
         for finger in fingers:
             n = contact_normal[finger] / (np.linalg.norm(contact_normal[finger]) + eps)
             f = contact_force[finger]['force']
+            # make sure the normal vector is in the contact normal direction
+            n = -n if np.dot(n, f) < 0 else n
 
             f_n = np.dot(f, n) * n
             f_t = f - f_n
@@ -733,12 +733,13 @@ class AllegroEnv:
 
             contact_frame = np.stack([x_c, y_c, z_c], axis=1)
             frame_data[finger] = {
-                'f_n': f_n,
-                'f_t': f_t,
-                'contact_frame': contact_frame,
-                'norm_fn': np.linalg.norm(f_n),
-                'norm_ft': np.linalg.norm(f_t),
-                'force_proj_local': contact_frame.T @ f
+                'f': f, # world frame force vector
+                'f_n': f_n, # world frame force vector in contact normal direction
+                'f_t': f_t, # world frame force vector in tangential direction
+                'contact_frame': contact_frame, # contact frame matrix
+                'norm_fn': np.linalg.norm(f_n), # norm of force in contact normal direction
+                'norm_ft': np.linalg.norm(f_t), # norm of force in tangential direction
+                'force_proj_local': contact_frame.T @ f # local frame force projection
             }
 
         return frame_data
@@ -773,7 +774,6 @@ class AllegroEnv:
 
     def _contact_controller(self, delta_q, normal_vectors):
         """
-
         :param delta_q:
         :param normal_vectors: (B x num_contacts x 3)
         :return:
@@ -1074,14 +1074,13 @@ class AllegroEnv:
             # segmentation
             from segmentation_pc import process_one_pcd
             screwdriver_pcd_np = process_one_pcd(pcd)
-            point_cloud = screwdriver_pcd_np
-            # self.visualize_point_cloud_as_spheres(self.envs[0], point_cloud)
 
             # registration
             from PointsRegistration import points_registration
             import open3d as o3d
             reg = points_registration()
             point_cloud = reg.add_noise_to_ply(screwdriver_pcd_np)
+            self.obsverved_pcd = point_cloud # save the observed pcd
 
             sample_points = o3d.io.read_point_cloud('screwdriver_pcd.ply')
             pc = np.asarray(sample_points.points)

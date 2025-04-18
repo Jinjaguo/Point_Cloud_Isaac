@@ -387,7 +387,7 @@ def do_trial(env, params, fpath, sim_viz_env=None, ros_copy_node=None, inits_noi
                 # record the sdf of each fingers in gym env
                 q_state_n2r = state['q'][:16].reshape(1, 1, 16).to(device=params['device'])
                 yaw_n2r = q_state_n2r[:, :, -2].item()
-                from only_sdf_planner import _preprocess_fingers
+                from getContactData import _preprocess_fingers
                 data = _preprocess_fingers(q_state_n2r, contact_scenes)
                 for finger in fingers:
                     g = data[finger]['sdf']
